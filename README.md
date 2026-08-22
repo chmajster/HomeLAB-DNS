@@ -2,7 +2,7 @@
 
 ChrisLab-DNS is a production-oriented Web UI and REST API for installing and managing BIND9 on Ubuntu Server and Debian. BIND zone files remain the authoritative DNS source. The application stores management metadata, users, API tokens, audit events and backup metadata in SQLAlchemy; SQLite is the default database and `DATABASE_URL` can later point to PostgreSQL with the appropriate SQLAlchemy driver.
 
-Version: **0.1.0**
+Version: **0.1.1**
 
 ## Features
 
@@ -49,6 +49,7 @@ ChrisLab-DNS/
 │   └── static/
 ├── scripts/
 │   ├── privileged_helper.py
+│   ├── install_config.py
 │   ├── backup.sh
 │   └── restore.sh
 ├── config/                 # sudo/helper configuration
@@ -103,6 +104,65 @@ ONE_TIME_ADMIN_PASSWORD=<generated-secret>
 ```
 
 The generated password is not stored in plaintext and is not printed again. A repeated `./install.sh` preserves the existing environment file, database, administrator credentials and BIND configuration.
+
+### JSON and silent installation
+
+For unattended provisioning, pass a validated JSON configuration with `--config` (or `--json`) and enable `--silent`:
+
+```bash
+sudo ./install.sh \
+  --config /root/chrislab-dns-install.json \
+  --silent \
+  --result-json /root/chrislab-dns-install-result.json
+```
+
+`--silent` uses non-interactive package installation and suppresses normal command output. If `--result-json` is provided, successful silent installation writes the final result there with mode `0600` and produces no normal stdout. The result contains the panel URL, administrator creation status, synchronization result, and the one-time generated administrator password when the installer generated one.
+
+A complete template is available as `config/install.example.json`:
+
+```json
+{
+  "app": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "data_dir": "/var/lib/bind9-web-manager"
+  },
+  "bind": {
+    "config": "/etc/bind/named.conf",
+    "local_config": "/etc/bind/named.conf.local",
+    "managed_config": "/etc/bind/named.conf.chrislab",
+    "zone_dir": "/etc/bind/zones",
+    "allowed_read_roots": ["/etc/bind", "/var/lib/bind", "/var/cache/bind"]
+  },
+  "security": {
+    "session_secure": false,
+    "session_samesite": "lax",
+    "session_max_age": 28800,
+    "auto_backup": true,
+    "trusted_hosts": ["dns-server.example.com", "127.0.0.1"],
+    "log_level": "INFO"
+  },
+  "admin": {
+    "username": "admin",
+    "password_file": "/root/chrislab-dns-admin-password"
+  },
+  "installation": {
+    "sync_existing": true,
+    "remove_default_nginx_site": true
+  }
+}
+```
+
+`admin.password_file` is preferred for automated deployments. `admin.password` is also accepted, requires at least 12 characters, and is never written to the application database in plaintext. The installer copies either form into a temporary `/run` file with restrictive permissions before invoking the application CLI. `admin.password` and `admin.password_file` cannot be used together.
+
+The JSON parser is strict: unknown keys, invalid types, unsafe paths, public backend listeners, invalid ports and inconsistent cookie settings are rejected before the application is configured. BIND configuration paths must remain under `/etc/bind`; `allowed_read_roots` can include approved external directories for existing zone files. On an already installed host, the current runtime paths and settings from `/etc/bind9-web-manager.env` take precedence so a repeated provisioning run cannot silently relocate the database or active BIND configuration.
+
+Useful commands:
+
+```bash
+./install.sh --help
+python3 scripts/install_config.py config/install.example.json --format json
+```
 
 ## Existing BIND9 installations
 
