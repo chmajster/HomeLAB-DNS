@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -106,7 +105,10 @@ def parse_config(path: Path) -> dict[str, str]:
     if "port" in app:
         out["APP_PORT"] = str(integer(app["port"], "app.port", 1, 65535))
     if "data_dir" in app:
-        out["DATA_DIR"] = absolute_path(app["data_dir"], "app.data_dir")
+        data_dir = Path(absolute_path(app["data_dir"], "app.data_dir"))
+        if not any(root in data_dir.parents for root in (Path("/var/lib"), Path("/srv"))):
+            raise ConfigError("app.data_dir must be a dedicated subdirectory under /var/lib or /srv")
+        out["DATA_DIR"] = str(data_dir)
 
     path_fields = {
         "config": "BIND_CONFIG",
