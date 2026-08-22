@@ -50,6 +50,12 @@ def test_json_install_config_normalizes_values(tmp_path: Path) -> None:
     assert data["SYNC_EXISTING"] == "false"
 
 
+def test_json_install_config_rejects_unsafe_data_dir(tmp_path: Path) -> None:
+    result = run_parser(tmp_path, {"app": {"data_dir": "/etc"}})
+    assert result.returncode == 2
+    assert "dedicated subdirectory under /var/lib or /srv" in result.stderr
+
+
 def test_json_install_config_rejects_unknown_options(tmp_path: Path) -> None:
     result = run_parser(tmp_path, {"installation": {"shell_command": "rm -rf /"}})
     assert result.returncode == 2
