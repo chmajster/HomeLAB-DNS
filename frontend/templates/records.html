@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Records · ChrisLab DNS{% endblock %}{% block content %}
+<h1 class="h3">Records</h1><form class="my-3"><div class="input-group"><input class="form-control" name="q" value="{{ q }}" placeholder="Zone, hostname, IP, value or type"><button class="btn btn-outline-secondary">Search</button></div></form>
+<div class="card"><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Zone</th><th>Name</th><th>Type</th><th>Value</th><th>TTL</th></tr></thead><tbody>{% for record, zone in rows %}<tr><td><a href="/zones/{{ zone.name }}">{{ zone.name }}</a></td><td>{{ record.name }}</td><td>{{ record.type }}</td><td class="font-monospace small">{{ record.value }}</td><td>{{ record.ttl }}</td></tr>{% else %}<tr><td colspan="5" class="text-center text-body-secondary py-5">No records found.</td></tr>{% endfor %}</tbody></table></div></div>
+{% endblock %}

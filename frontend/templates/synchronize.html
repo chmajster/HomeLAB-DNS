@@ -1,0 +1,3 @@
+{% extends "base.html" %}{% block title %}Synchronize · ChrisLab DNS{% endblock %}{% block content %}
+<h1 class="h3">Synchronize</h1><p class="text-body-secondary">Compare active BIND configuration with the panel database without overwriting manual administrator changes.</p><div class="d-flex gap-2 mb-3"><button class="btn btn-primary" id="sync-scan">Scan configuration</button>{% if 'zones.write' in permissions %}<button class="btn btn-outline-primary" id="sync-import">Import missing zones</button>{% endif %}</div><pre id="sync-result" class="result-box">No scan executed.</pre>
+{% endblock %}
