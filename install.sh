@@ -211,6 +211,12 @@ fi
 
 BACKUP_DIR="$DATA_DIR/backups"
 STAGING_DIR="$DATA_DIR/staging"
+resolved_data_dir="$(realpath -m "$DATA_DIR")"
+case "$resolved_data_dir" in
+  /var/lib/*|/srv/*) ;;
+  *) fail "APP_DATA_DIR must resolve below /var/lib or /srv" ;;
+esac
+[[ ! -L "$DATA_DIR" ]] || fail "APP_DATA_DIR must not be a symbolic link"
 
 if ! getent passwd "$APP_USER" >/dev/null; then
   useradd --system --user-group --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$APP_USER"
@@ -348,6 +354,9 @@ if [[ -n "$ADMIN_PASSWORD" || -n "$ADMIN_PASSWORD_FILE" ]]; then
     [[ "$ADMIN_PASSWORD_FILE" == /* ]] || fail "admin.password_file must be absolute"
     [[ -f "$ADMIN_PASSWORD_FILE" && ! -L "$ADMIN_PASSWORD_FILE" ]] || fail "admin.password_file must be a regular non-symlink file"
     [[ -r "$ADMIN_PASSWORD_FILE" ]] || fail "admin.password_file is not readable"
+    [[ "$(stat -c %u "$ADMIN_PASSWORD_FILE")" == 0 ]] || fail "admin.password_file must be owned by root"
+    admin_password_mode="$(stat -c %a "$ADMIN_PASSWORD_FILE")"
+    (( (8#$admin_password_mode & 8#022) == 0 )) || fail "admin.password_file must not be group/world writable"
     [[ "$(stat -c %s "$ADMIN_PASSWORD_FILE")" -le 4096 ]] || fail "admin.password_file is too large"
     cat "$ADMIN_PASSWORD_FILE" > "$ADMIN_SECRET_TEMP"
   else
@@ -390,6 +399,10 @@ if [[ -n "$RESULT_JSON" ]]; then
   if [[ ! -d "$result_parent" ]]; then
     install -d -o root -g root -m 0700 "$result_parent"
   fi
+  [[ ! -L "$result_parent" && "$(stat -c %u "$result_parent")" == 0 ]] || fail "--result-json parent must be a root-owned directory, not a symlink"
+  result_parent_mode="$(stat -c %a "$result_parent")"
+  (( (8#$result_parent_mode & 8#022) == 0 )) || fail "--result-json parent must not be group/world writable"
+  [[ ! -L "$RESULT_JSON" ]] || fail "--result-json target must not be a symbolic link"
   RESULT_URL="$install_url" RESULT_ADMIN_USERNAME="$ADMIN_USERNAME" RESULT_ADMIN_STATUS="$admin_status" RESULT_ADMIN_PASSWORD="$one_time_password" RESULT_SYNC="$sync_output" python3 - "$RESULT_JSON" <<'PY'
 import json
 import os
