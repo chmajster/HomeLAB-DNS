@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import secrets
 import string
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -20,6 +21,18 @@ def strong_password(length: int = 24) -> str:
         value = "".join(secrets.choice(alphabet) for _ in range(length))
         if any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value) and any(c in "!@#$%^&*_-+=" for c in value):
             return value
+
+
+def read_password_file(path_text: str) -> str:
+    path = Path(path_text)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Password file must be a regular file and must not be a symlink")
+    if path.stat().st_size > 4096:
+        raise ValueError("Password file is too large")
+    password = path.read_text(encoding="utf-8").rstrip("\r\n")
+    if not password:
+        raise ValueError("Password file is empty")
+    return password
 
 
 def create_admin(username: str, password: str | None) -> str | None:
@@ -76,7 +89,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("create-admin")
     admin.add_argument("--username", default="admin")
-    admin.add_argument("--password")
+    password_group = admin.add_mutually_exclusive_group()
+    password_group.add_argument("--password")
+    password_group.add_argument("--password-file")
     sub.add_parser("migrate")
     sub.add_parser("sync-existing")
     backup = sub.add_parser("backup")
@@ -85,7 +100,8 @@ def main() -> None:
     restore.add_argument("--id", type=int, required=True)
     args = parser.parse_args()
     if args.command == "create-admin":
-        result = create_admin(args.username, args.password)
+        password = read_password_file(args.password_file) if args.password_file else args.password
+        result = create_admin(args.username, password)
         if result is None:
             print("ADMIN_EXISTS")
         elif result:
