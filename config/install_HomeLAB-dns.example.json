@@ -1,0 +1,7 @@
+{
+  "forward_dns_server": "1.1.1.1",
+  "panel_login": "admin",
+  "panel_password": "CHANGE_ME_STRONG_PASSWORD",
+  "panel_api_token": "cldns_CHANGE_ME_WITH_A_LONG_RANDOM_TOKEN_VALUE",
+  "port": 81
+}

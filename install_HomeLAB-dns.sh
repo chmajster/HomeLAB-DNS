@@ -2,10 +2,12 @@
 set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_INSTALLER="$SOURCE_DIR/install.sh"
 DEFAULT_CONFIG="/root/configs/install_HomeLAB-dns.json"
 CONFIG_FILE="$DEFAULT_CONFIG"
-BASE_INSTALLER="$SOURCE_DIR/install.sh"
+CONFIG_EXPLICIT=false
 SILENT=false
+RESULT_JSON=""
 
 FORWARD_DNS_SERVER=""
 PANEL_LOGIN=""
@@ -16,25 +18,31 @@ PUBLIC_PORT="81"
 BASE_CONFIG=""
 PASSWORD_FILE=""
 TOKEN_FILE=""
+NORMALIZED_CONFIG=""
+BASE_RESULT_JSON=""
 
 usage() {
   cat <<'EOF'
 Usage: sudo ./install_HomeLAB-dns.sh [OPTIONS]
 
-The installer automatically uses:
+Provisioning mode automatically looks for:
   /root/configs/install_HomeLAB-dns.json
 
-If the file does not exist, interactive installation asks for:
-  - Forward DNS server
-  - DNS Panel login
-  - DNS Panel password
-  - DNS Panel API token
-  - Public panel port (default: 81)
+Expected JSON fields:
+  - forward_dns_server
+  - panel_login
+  - panel_password
+  - panel_api_token
+  - port
+
+If the default JSON file exists, it is used automatically.
+If it does not exist, the normal HomeLAB-DNS installer is executed unchanged.
 
 Options:
-  --config FILE   Use another HomeLAB-DNS installer JSON file.
-  --silent        Pass silent mode to the base installer. Requires an existing JSON file.
-  -h, --help      Show this help.
+  --config FILE       Use another provisioning JSON file. The file must exist.
+  --silent            Run unattended/minimal-output installation.
+  --result-json FILE  Write machine-readable installation result.
+  -h, --help          Show this help.
 EOF
 }
 
@@ -47,19 +55,27 @@ cleanup() {
   [[ -n "$BASE_CONFIG" ]] && rm -f "$BASE_CONFIG"
   [[ -n "$PASSWORD_FILE" ]] && rm -f "$PASSWORD_FILE"
   [[ -n "$TOKEN_FILE" ]] && rm -f "$TOKEN_FILE"
+  [[ -n "$NORMALIZED_CONFIG" ]] && rm -f "$NORMALIZED_CONFIG"
+  [[ -n "$BASE_RESULT_JSON" ]] && rm -f "$BASE_RESULT_JSON"
 }
 trap cleanup EXIT
 
 while (($#)); do
   case "$1" in
-    --config)
-      (($# >= 2)) || fail "--config requires a file path"
+    --config|--json)
+      (($# >= 2)) || fail "$1 requires a file path"
       CONFIG_FILE="$2"
+      CONFIG_EXPLICIT=true
       shift 2
       ;;
     --silent|--non-interactive)
       SILENT=true
       shift
+      ;;
+    --result-json)
+      (($# >= 2)) || fail "--result-json requires a file path"
+      RESULT_JSON="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -71,16 +87,32 @@ while (($#)); do
   esac
 done
 
+[[ -x "$BASE_INSTALLER" ]] || fail "Base installer is missing or not executable: $BASE_INSTALLER"
+
+# Exact requested behavior: use the provisioning JSON when it exists;
+# otherwise preserve the original HomeLAB-DNS installation flow.
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  if [[ "$CONFIG_EXPLICIT" == true ]]; then
+    fail "Configuration file does not exist: $CONFIG_FILE"
+  fi
+
+  args=()
+  [[ "$SILENT" == true ]] && args+=(--silent)
+  [[ -n "$RESULT_JSON" ]] && args+=(--result-json "$RESULT_JSON")
+  exec "$BASE_INSTALLER" "${args[@]}"
+fi
+
 if [[ ${EUID} -ne 0 ]]; then
   args=(--config "$CONFIG_FILE")
   [[ "$SILENT" == true ]] && args+=(--silent)
+  [[ -n "$RESULT_JSON" ]] && args+=(--result-json "$RESULT_JSON")
   exec sudo -E "$0" "${args[@]}"
 fi
 
-[[ -x "$BASE_INSTALLER" ]] || fail "Base installer is missing or not executable: $BASE_INSTALLER"
-
 validate_config_security() {
   local path="$1" mode owner
+
+  [[ "$path" == /* ]] || fail "Configuration path must be absolute: $path"
   [[ -f "$path" && ! -L "$path" ]] || fail "Configuration must be a regular non-symlink file: $path"
   owner="$(stat -c %u "$path")"
   [[ "$owner" == 0 ]] || fail "Configuration must be owned by root: $path"
@@ -90,16 +122,11 @@ validate_config_security() {
 
 load_config() {
   local path="$1"
-  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
-    case "$key" in
-      FORWARD_DNS_SERVER) FORWARD_DNS_SERVER="$value" ;;
-      PANEL_LOGIN) PANEL_LOGIN="$value" ;;
-      PANEL_PASSWORD) PANEL_PASSWORD="$value" ;;
-      PANEL_API_TOKEN) PANEL_API_TOKEN="$value" ;;
-      PUBLIC_PORT) PUBLIC_PORT="$value" ;;
-      *) fail "Unexpected normalized configuration key: $key" ;;
-    esac
-  done < <(python3 - "$path" <<'PY'
+
+  NORMALIZED_CONFIG="$(mktemp /run/homelab-dns-normalized.XXXXXX)"
+  chmod 0600 "$NORMALIZED_CONFIG"
+
+  python3 - "$path" >"$NORMALIZED_CONFIG" <<'PY'
 import ipaddress
 import json
 import re
@@ -170,91 +197,27 @@ values = {
 for key, value in values.items():
     sys.stdout.buffer.write(key.encode() + b"\0" + value.encode() + b"\0")
 PY
-  )
+
+  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+    case "$key" in
+      FORWARD_DNS_SERVER) FORWARD_DNS_SERVER="$value" ;;
+      PANEL_LOGIN) PANEL_LOGIN="$value" ;;
+      PANEL_PASSWORD) PANEL_PASSWORD="$value" ;;
+      PANEL_API_TOKEN) PANEL_API_TOKEN="$value" ;;
+      PUBLIC_PORT) PUBLIC_PORT="$value" ;;
+      *) fail "Unexpected normalized configuration key: $key" ;;
+    esac
+  done < "$NORMALIZED_CONFIG"
+
+  [[ -n "$FORWARD_DNS_SERVER" ]] || fail "forward_dns_server was not loaded"
+  [[ -n "$PANEL_LOGIN" ]] || fail "panel_login was not loaded"
+  [[ -n "$PANEL_PASSWORD" ]] || fail "panel_password was not loaded"
+  [[ -n "$PANEL_API_TOKEN" ]] || fail "panel_api_token was not loaded"
 }
 
-create_interactive_config() {
-  [[ -t 0 ]] || fail "Configuration $CONFIG_FILE does not exist and interactive input is unavailable"
-
-  local value generated_token
-
-  read -r -p "Forward DNS server [1.1.1.1]: " value
-  FORWARD_DNS_SERVER="${value:-1.1.1.1}"
-
-  read -r -p "Login do Panelu DNS [admin]: " value
-  PANEL_LOGIN="${value:-admin}"
-
-  while :; do
-    read -r -s -p "Haslo do Panelu DNS (minimum 12 znakow): " PANEL_PASSWORD
-    echo
-    [[ ${#PANEL_PASSWORD} -ge 12 ]] && break
-    echo "Haslo musi miec co najmniej 12 znakow." >&2
-  done
-
-  generated_token="$(python3 -c 'import secrets; print("cldns_" + secrets.token_urlsafe(36))')"
-  read -r -p "Token do API PANELU DNS [Enter = wygeneruj automatycznie]: " value
-  PANEL_API_TOKEN="${value:-$generated_token}"
-
-  read -r -p "Port dzialania Panelu DNS [81]: " value
-  PUBLIC_PORT="${value:-81}"
-
-  python3 - "$FORWARD_DNS_SERVER" "$PANEL_LOGIN" "$PANEL_PASSWORD" "$PANEL_API_TOKEN" "$PUBLIC_PORT" <<'PY'
-import ipaddress
-import re
-import sys
-
-forwarder, login, password, token, port_text = sys.argv[1:]
-try:
-    ipaddress.ip_address(forwarder)
-except ValueError as exc:
-    raise SystemExit("Forward DNS server must be a valid IPv4 or IPv6 address") from exc
-if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", login):
-    raise SystemExit("Panel login contains unsupported characters")
-if len(password) < 12:
-    raise SystemExit("Panel password must contain at least 12 characters")
-if not token.startswith("cldns_") or len(token) < 32:
-    raise SystemExit("API token must start with 'cldns_' and contain at least 32 characters")
-try:
-    port = int(port_text)
-except ValueError as exc:
-    raise SystemExit("Panel port must be an integer") from exc
-if not 1 <= port <= 65535:
-    raise SystemExit("Panel port must be between 1 and 65535")
-PY
-
-  install -d -o root -g root -m 0700 "$(dirname "$CONFIG_FILE")"
-  umask 077
-  FORWARD_DNS_SERVER="$FORWARD_DNS_SERVER" PANEL_LOGIN="$PANEL_LOGIN" PANEL_PASSWORD="$PANEL_PASSWORD" PANEL_API_TOKEN="$PANEL_API_TOKEN" PUBLIC_PORT="$PUBLIC_PORT" python3 - "$CONFIG_FILE" <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-data = {
-    "forward_dns_server": os.environ["FORWARD_DNS_SERVER"],
-    "panel_login": os.environ["PANEL_LOGIN"],
-    "panel_password": os.environ["PANEL_PASSWORD"],
-    "panel_api_token": os.environ["PANEL_API_TOKEN"],
-    "port": int(os.environ["PUBLIC_PORT"]),
-}
-path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-path.chmod(0o600)
-PY
-  chown root:root "$CONFIG_FILE"
-  echo "Zapisano konfiguracje instalacji: $CONFIG_FILE"
-}
-
-if [[ -f "$CONFIG_FILE" ]]; then
-  validate_config_security "$CONFIG_FILE"
-  load_config "$CONFIG_FILE"
-  echo "Uzywam konfiguracji: $CONFIG_FILE"
-else
-  [[ "$SILENT" != true ]] || fail "Silent installation requires an existing configuration file: $CONFIG_FILE"
-  create_interactive_config
-  validate_config_security "$CONFIG_FILE"
-  load_config "$CONFIG_FILE"
-fi
+validate_config_security "$CONFIG_FILE"
+load_config "$CONFIG_FILE"
+[[ "$SILENT" == true ]] || echo "Using HomeLAB provisioning configuration: $CONFIG_FILE"
 
 BASE_CONFIG="$(mktemp /run/homelab-dns-base-config.XXXXXX.json)"
 PASSWORD_FILE="$(mktemp /run/homelab-dns-panel-password.XXXXXX)"
@@ -288,13 +251,18 @@ PY
 
 base_args=(--config "$BASE_CONFIG")
 [[ "$SILENT" == true ]] && base_args+=(--silent)
+if [[ -n "$RESULT_JSON" ]]; then
+  BASE_RESULT_JSON="$(mktemp /run/homelab-dns-base-result.XXXXXX.json)"
+  rm -f "$BASE_RESULT_JSON"
+  base_args+=(--result-json "$BASE_RESULT_JSON")
+fi
 "$BASE_INSTALLER" "${base_args[@]}"
 
 BIND_OPTIONS="/etc/bind/named.conf.options"
 BIND_CONFIG="/etc/bind/named.conf"
 [[ -f "$BIND_OPTIONS" && ! -L "$BIND_OPTIONS" ]] || fail "BIND options file is missing or unsafe: $BIND_OPTIONS"
 
-bind_backup="${BIND_OPTIONS}.before-homelab-dns"
+bind_backup="$(mktemp /run/homelab-dns-bind-options.XXXXXX)"
 cp -a "$BIND_OPTIONS" "$bind_backup"
 if ! FORWARD_DNS_SERVER="$FORWARD_DNS_SERVER" python3 - "$BIND_OPTIONS" <<'PY'
 import os
@@ -318,11 +286,13 @@ path.write_text(text, encoding="utf-8")
 PY
 then
   cp -a "$bind_backup" "$BIND_OPTIONS"
+  rm -f "$bind_backup"
   fail "Failed to configure BIND forwarder"
 fi
 
 if ! named-checkconf "$BIND_CONFIG"; then
   cp -a "$bind_backup" "$BIND_OPTIONS"
+  rm -f "$bind_backup"
   fail "BIND configuration validation failed; named.conf.options was restored"
 fi
 rm -f "$bind_backup"
@@ -330,7 +300,7 @@ systemctl reload bind9
 
 NGINX_SITE="/etc/nginx/sites-available/bind9-web-manager"
 [[ -f "$NGINX_SITE" && ! -L "$NGINX_SITE" ]] || fail "Nginx site file is missing or unsafe: $NGINX_SITE"
-nginx_backup="${NGINX_SITE}.before-homelab-dns"
+nginx_backup="$(mktemp /run/homelab-dns-nginx.XXXXXX)"
 cp -a "$NGINX_SITE" "$nginx_backup"
 
 if ! PUBLIC_PORT="$PUBLIC_PORT" python3 - "$NGINX_SITE" <<'PY'
@@ -360,12 +330,13 @@ path.write_text(text, encoding="utf-8")
 PY
 then
   cp -a "$nginx_backup" "$NGINX_SITE"
+  rm -f "$nginx_backup"
   fail "Failed to configure Nginx public port"
 fi
 
 if ! nginx -t; then
   cp -a "$nginx_backup" "$NGINX_SITE"
-  nginx -t >/dev/null 2>&1 || true
+  rm -f "$nginx_backup"
   fail "Nginx validation failed; previous site configuration was restored"
 fi
 rm -f "$nginx_backup"
@@ -378,11 +349,13 @@ ENV_FILE="/etc/bind9-web-manager.env"
 chown "$APP_USER:$APP_GROUP" "$TOKEN_FILE"
 chmod 0400 "$TOKEN_FILE"
 
-(cd "$APP_DIR" && runuser -u "$APP_USER" -- env \
-  ENV_FILE="$ENV_FILE" \
-  PANEL_LOGIN="$PANEL_LOGIN" \
-  TOKEN_FILE="$TOKEN_FILE" \
-  "$APP_DIR/.venv/bin/python" - <<'PY'
+(
+  cd "$APP_DIR"
+  runuser -u "$APP_USER" -- env \
+    ENV_FILE="$ENV_FILE" \
+    PANEL_LOGIN="$PANEL_LOGIN" \
+    TOKEN_FILE="$TOKEN_FILE" \
+    "$APP_DIR/.venv/bin/python" - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -417,7 +390,12 @@ with SessionLocal() as db:
         )
     )
     if row is None:
-        row = ApiToken(user_id=user.id, name="install_HomeLAB-dns")
+        row = ApiToken(
+            user_id=user.id,
+            name="install_HomeLAB-dns",
+            token_hash=digest,
+            token_prefix=raw_token[:18],
+        )
         db.add(row)
 
     row.name = "install_HomeLAB-dns"
@@ -437,9 +415,38 @@ if [[ "$host_ip" == *:* ]]; then
 else
   host_for_url="$host_ip"
 fi
+panel_url="http://${host_for_url}:${PUBLIC_PORT}/"
+
+if [[ -n "$RESULT_JSON" ]]; then
+  result_parent="$(dirname "$RESULT_JSON")"
+  install -d -o root -g root -m 0700 "$result_parent"
+  [[ ! -L "$result_parent" && "$(stat -c %u "$result_parent")" == 0 ]] || fail "--result-json parent must be root-owned and not a symlink"
+  [[ ! -L "$RESULT_JSON" ]] || fail "--result-json target must not be a symbolic link"
+
+  RESULT_JSON="$RESULT_JSON" BASE_RESULT_JSON="$BASE_RESULT_JSON" PANEL_URL="$panel_url" FORWARD_DNS_SERVER="$FORWARD_DNS_SERVER" CONFIG_FILE="$CONFIG_FILE" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+base_path = Path(os.environ["BASE_RESULT_JSON"])
+result = json.loads(base_path.read_text(encoding="utf-8")) if base_path.exists() else {"status": "installed"}
+result["url"] = os.environ["PANEL_URL"]
+result["forward_dns_server"] = os.environ["FORWARD_DNS_SERVER"]
+result["provisioning_config"] = os.environ["CONFIG_FILE"]
+result["api_token_configured"] = True
+path = Path(os.environ["RESULT_JSON"])
+path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+path.chmod(0o600)
+PY
+fi
+
+if [[ "$SILENT" == true && -n "$RESULT_JSON" ]]; then
+  exit 0
+fi
 
 echo "HomeLAB-DNS installation completed."
-echo "Panel URL: http://${host_for_url}:${PUBLIC_PORT}/"
+echo "Panel URL: $panel_url"
 echo "Forward DNS server: $FORWARD_DNS_SERVER"
 echo "Panel login: $PANEL_LOGIN"
 echo "API token configured from: $CONFIG_FILE"
+[[ -n "$RESULT_JSON" ]] && echo "Installation result: $RESULT_JSON"
