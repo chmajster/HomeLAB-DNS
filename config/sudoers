@@ -1,0 +1,3 @@
+# Installed as /etc/sudoers.d/bind9-web-manager with mode 0440.
+Cmnd_Alias CHRISLAB_DNS_HELPER = /usr/local/libexec/bind9-web-manager-helper *
+bind9-web-manager ALL=(root) NOPASSWD: CHRISLAB_DNS_HELPER

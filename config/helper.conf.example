@@ -1,0 +1,8 @@
+BIND_ROOT=/etc/bind
+BIND_CONFIG=/etc/bind/named.conf
+BIND_MANAGED_CONFIG=/etc/bind/named.conf.chrislab
+BIND_ZONE_DIR=/etc/bind/zones
+BACKUP_DIR=/var/lib/bind9-web-manager/backups
+STAGING_DIR=/var/lib/bind9-web-manager/staging
+APP_USER=bind9-web-manager
+ALLOWED_BIND_READ_ROOTS=/etc/bind,/var/lib/bind,/var/cache/bind

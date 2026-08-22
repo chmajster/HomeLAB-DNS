@@ -1,0 +1,42 @@
+[Unit]
+Description=ChrisLab DNS Web Manager
+After=network-online.target bind9.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bind9-web-manager
+Group=bind9-web-manager
+WorkingDirectory=/opt/bind9-web-manager
+EnvironmentFile=/etc/bind9-web-manager.env
+ExecStart=/opt/bind9-web-manager/.venv/bin/python -m uvicorn backend.app.main:app --host ${APP_HOST} --port ${APP_PORT} --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/bind9-web-manager /etc/bind
+ReadOnlyPaths=/opt/bind9-web-manager /etc/bind9-web-manager.env /etc/bind9-web-manager-helper.conf /usr/local/libexec/bind9-web-manager-helper
+# sudo must be able to transition to root for the narrowly allowlisted helper.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

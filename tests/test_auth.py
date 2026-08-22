@@ -1,0 +1,33 @@
+import json
+
+from sqlalchemy import select
+
+from backend.app.models import ApiToken, User
+from backend.app.permissions import ALL_PERMISSIONS
+from backend.app.security import create_api_token, hash_password, token_digest, verify_password
+
+
+def test_argon2id_password_hash():
+    hashed = hash_password("Long-Password-123!")
+    assert hashed.startswith("$argon2id$")
+    assert verify_password(hashed, "Long-Password-123!")
+    assert not verify_password(hashed, "wrong")
+
+
+def test_unauthorized_api_is_401(client):
+    response = client.get("/api/v1/zones")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_read_only_cannot_create_zone(client, readonly_token):
+    response = client.post("/api/v1/zones", headers={"Authorization": f"Bearer {readonly_token}"}, json={"name":"example.com"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_api_token_plaintext_not_stored(db, admin_token):
+    row = db.scalar(select(ApiToken).where(ApiToken.token_hash == token_digest(admin_token)))
+    assert row is not None
+    assert admin_token not in row.token_hash
+    assert len(row.token_hash) == 64
