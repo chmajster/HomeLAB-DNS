@@ -58,6 +58,29 @@ def test_homelab_installer_protects_secret_config() -> None:
     assert "path.chmod(0o600)" in content
 
 
+def test_homelab_installer_uses_linux_pam_identity() -> None:
+    content = INSTALLER.read_text(encoding="utf-8")
+    assert 'getent passwd "$PANEL_LOGIN"' in content
+    assert 'useradd --create-home --shell /bin/bash "$PANEL_LOGIN"' in content
+    assert 'chpasswd' in content
+    assert "Linux/PAM" in content
+
+
+def test_panel_api_token_is_optional() -> None:
+    content = INSTALLER.read_text(encoding="utf-8")
+    required_block = content.split('required = {', 1)[1].split('}', 1)[0]
+    assert '"panel_api_token"' not in required_block
+    assert 'if [[ -n "$PANEL_API_TOKEN" ]]; then' in content
+    assert 'api_token_configured=false' in content
+
+
+def test_installer_has_no_panel_password_length_restriction() -> None:
+    content = INSTALLER.read_text(encoding="utf-8")
+    assert "panel_password must contain at least 12 characters" not in content
+    parser = (ROOT / "scripts" / "install_config.py").read_text(encoding="utf-8")
+    assert "admin.password must contain at least 12 characters" not in parser
+
+
 def test_homelab_example_config_matches_required_schema() -> None:
     data = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
     assert set(data) == {
