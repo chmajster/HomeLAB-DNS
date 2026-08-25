@@ -153,10 +153,7 @@ def parse_config(path: Path) -> dict[str, str]:
     if "password" in admin and "password_file" in admin:
         raise ConfigError("admin.password and admin.password_file are mutually exclusive")
     if "password" in admin:
-        password = safe_text(admin["password"], "admin.password")
-        if len(password) < 12:
-            raise ConfigError("admin.password must contain at least 12 characters")
-        out["ADMIN_PASSWORD"] = password
+        out["ADMIN_PASSWORD"] = safe_text(admin["password"], "admin.password")
     if "password_file" in admin:
         out["ADMIN_PASSWORD_FILE"] = absolute_path(admin["password_file"], "admin.password_file")
 
