@@ -14,6 +14,9 @@ from .config import get_settings
 from .models import AppState, User
 
 
+EXTERNAL_PASSWORD_MARKER = "!external-auth!"
+
+
 @dataclass(frozen=True)
 class LdapSettings:
     enabled: bool = False
@@ -222,19 +225,26 @@ def authenticate_identity(db: Session, username: str, password: str) -> str | No
 def ensure_authorization_profile(db: Session, username: str, auth_type: str) -> User:
     user = db.scalar(select(User).where(User.username == username))
     if user is not None:
+        if user.password_hash != EXTERNAL_PASSWORD_MARKER:
+            user.password_hash = EXTERNAL_PASSWORD_MARKER
+            db.commit()
         return user
 
-    enabled_admins = db.scalar(
-        select(func.count(User.id)).where(User.role == "administrator", User.enabled.is_(True))
+    enabled_external_admins = db.scalar(
+        select(func.count(User.id)).where(
+            User.role == "administrator",
+            User.enabled.is_(True),
+            User.password_hash == EXTERNAL_PASSWORD_MARKER,
+        )
     ) or 0
-    if enabled_admins == 0:
+    if enabled_external_admins == 0:
         role = "administrator"
     elif auth_type == "ldap":
         role = get_ldap_settings(db).default_role
     else:
         role = "read_only"
 
-    user = User(username=username, password_hash="!external-auth!", role=role, enabled=True)
+    user = User(username=username, password_hash=EXTERNAL_PASSWORD_MARKER, role=role, enabled=True)
     db.add(user)
     db.commit()
     db.refresh(user)
