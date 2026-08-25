@@ -1,0 +1,4 @@
+# ChrisLab DNS Web UI authentication
+# Use the distribution's local authentication/account policy.
+@include common-auth
+@include common-account

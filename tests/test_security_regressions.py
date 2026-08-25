@@ -36,16 +36,17 @@ def test_granular_api_token_cannot_write(client, db):
     assert denied.json()["error"]["code"] == "FORBIDDEN"
 
 
-def test_session_mutation_requires_csrf(client, db):
-    db.add(User(username="webadmin", password_hash=hash_password("Correct-Horse-45!"), role="administrator", enabled=True))
+def test_session_mutation_requires_csrf(client, db, monkeypatch):
+    db.add(User(username="webadmin", password_hash="!external-auth!", role="administrator", enabled=True))
     db.commit()
+    monkeypatch.setattr("backend.app.web.authenticate_identity", lambda _db, username, password: "pam" if username == "webadmin" and password == "pam-password" else None)
     page = client.get("/login")
     assert page.status_code == 200
     match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
     assert match is not None
     login = client.post(
         "/login",
-        data={"username": "webadmin", "password": "Correct-Horse-45!", "csrf_token": match.group(1)},
+        data={"username": "webadmin", "password": "pam-password", "csrf_token": match.group(1)},
         follow_redirects=False,
     )
     assert login.status_code == 303

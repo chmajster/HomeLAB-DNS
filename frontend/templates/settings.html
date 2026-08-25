@@ -1,3 +1,36 @@
 {% extends "base.html" %}{% block title %}Settings · ChrisLab DNS{% endblock %}{% block content %}
-<h1 class="h3">Settings</h1><div class="card mt-3"><div class="card-body"><h2 class="h5">Appearance</h2><form method="post" action="/settings/theme" class="row g-2 align-items-end"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col-md-4"><label class="form-label">Theme</label><select class="form-select" name="theme"><option value="light" {{ 'selected' if theme == 'light' }}>Light</option><option value="dark" {{ 'selected' if theme == 'dark' }}>Dark</option><option value="system" {{ 'selected' if theme == 'system' }}>System</option></select></div><div class="col-auto"><button class="btn btn-primary">Save</button></div></form></div></div><div class="card mt-3"><div class="card-body"><h2 class="h5">Configuration</h2><p class="mb-1">Backend listens only on the configured internal address. Nginx is the public reverse proxy.</p><p class="mb-0">System administration commands are delegated to the restricted privileged helper.</p></div></div>
+<h1 class="h3">Settings</h1>
+
+{% if saved %}<div class="alert alert-success mt-3">Authentication settings saved.</div>{% endif %}
+{% if ldap_test == 'ok' %}<div class="alert alert-success mt-3">LDAP connection test succeeded.</div>{% elif ldap_test == 'failed' %}<div class="alert alert-danger mt-3">LDAP connection test failed. Check server, TLS, bind credentials and Base DN.</div>{% endif %}
+
+<div class="card mt-3"><div class="card-body"><h2 class="h5">Appearance</h2><form method="post" action="/settings/theme" class="row g-2 align-items-end"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col-md-4"><label class="form-label">Theme</label><select class="form-select" name="theme"><option value="light" {{ 'selected' if theme == 'light' }}>Light</option><option value="dark" {{ 'selected' if theme == 'dark' }}>Dark</option><option value="system" {{ 'selected' if theme == 'system' }}>System</option></select></div><div class="col-auto"><button class="btn btn-primary">Save</button></div></form></div></div>
+
+<div class="card mt-3"><div class="card-body">
+<h2 class="h5">Authentication</h2>
+<p class="mb-2"><strong>Linux / PAM</strong> is always enabled and is the primary authentication source. ChrisLab DNS validates credentials through the dedicated <code>chrislab-dns</code> PAM service, which uses the distribution's local authentication and account policy.</p>
+<p class="text-body-secondary">The application database stores authorization profiles, roles, session preferences and API tokens. It is not the primary password database for Web UI login.</p>
+
+{% if can_manage_auth %}
+<hr>
+<h3 class="h6">LDAP</h3>
+<p class="text-body-secondary">LDAP is optional. When enabled, login first tries local PAM and then LDAP. Existing local PAM access remains available as a recovery path.</p>
+<form method="post" action="/settings/authentication" class="row g-3">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="col-12 form-check ms-2"><input class="form-check-input" type="checkbox" name="ldap_enabled" id="ldap_enabled" {{ 'checked' if ldap.enabled }}><label class="form-check-label" for="ldap_enabled">Enable LDAP authentication</label></div>
+<div class="col-md-6"><label class="form-label">LDAP URL</label><input class="form-control" name="ldap_url" value="{{ ldap.url }}" placeholder="ldap://ldap.example.local:389" required></div>
+<div class="col-md-3 form-check mt-5"><input class="form-check-input" type="checkbox" name="ldap_start_tls" id="ldap_start_tls" {{ 'checked' if ldap.start_tls }}><label class="form-check-label" for="ldap_start_tls">StartTLS</label></div>
+<div class="col-md-3 form-check mt-5"><input class="form-check-input" type="checkbox" name="ldap_verify_tls" id="ldap_verify_tls" {{ 'checked' if ldap.verify_tls }}><label class="form-check-label" for="ldap_verify_tls">Verify TLS certificate</label></div>
+<div class="col-md-6"><label class="form-label">Base DN</label><input class="form-control" name="ldap_base_dn" value="{{ ldap.base_dn }}" placeholder="dc=example,dc=local" required></div>
+<div class="col-md-6"><label class="form-label">User filter</label><input class="form-control" name="ldap_user_filter" value="{{ ldap.user_filter }}" required><div class="form-text">Must contain <code>{username}</code>, e.g. <code>(&amp;(objectClass=person)(uid={username}))</code>.</div></div>
+<div class="col-md-6"><label class="form-label">Bind DN</label><input class="form-control" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc-chrislab,ou=Service,dc=example,dc=local"><div class="form-text">Leave empty for anonymous search bind.</div></div>
+<div class="col-md-6"><label class="form-label">Bind password</label><input class="form-control" type="password" name="ldap_bind_password" autocomplete="new-password" placeholder="{{ 'Configured — leave empty to preserve' if ldap_bind_password_set else 'Optional' }}"><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="ldap_clear_bind_password" id="ldap_clear_bind_password"><label class="form-check-label" for="ldap_clear_bind_password">Clear stored bind password</label></div></div>
+<div class="col-md-4"><label class="form-label">Default role for new LDAP users</label><select class="form-select" name="ldap_default_role"><option value="read_only" {{ 'selected' if ldap.default_role == 'read_only' }}>Read Only</option><option value="operator" {{ 'selected' if ldap.default_role == 'operator' }}>Operator</option><option value="administrator" {{ 'selected' if ldap.default_role == 'administrator' }}>Administrator</option></select></div>
+<div class="col-12"><button class="btn btn-primary">Save authentication settings</button></div>
+</form>
+<form method="post" action="/settings/authentication/test" class="mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-outline-secondary">Test saved LDAP connection</button></form>
+{% endif %}
+</div></div>
+
+<div class="card mt-3"><div class="card-body"><h2 class="h5">Configuration</h2><p class="mb-1">Backend listens only on the configured internal address. Nginx is the public reverse proxy.</p><p class="mb-0">System administration commands are delegated to the restricted privileged helper.</p></div></div>
 {% endblock %}

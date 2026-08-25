@@ -2,7 +2,6 @@
   "forward_dns_server": "1.1.1.1",
   "web_ui_ip": "10.0.0.53",
   "panel_login": "admin",
-  "panel_password": "CHANGE_ME_STRONG_PASSWORD",
-  "panel_api_token": "cldns_CHANGE_ME_WITH_A_LONG_RANDOM_TOKEN_VALUE",
+  "panel_password": "PASSWORD",
   "port": 81
 }
