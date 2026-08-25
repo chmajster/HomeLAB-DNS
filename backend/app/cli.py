@@ -35,7 +35,7 @@ def read_password_file(path_text: str) -> str:
     return password
 
 
-def create_admin(username: str, password: str | None, *, only_if_admin_missing: bool = False) -> str | None:
+def create_admin(username: str, password: str | None, *, only_if_admin_missing: bool = True) -> str | None:
     init_db()
     generated = password is None
     password = password or strong_password()
@@ -99,7 +99,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("create-admin")
     admin.add_argument("--username", default="admin")
-    admin.add_argument("--only-if-admin-missing", action="store_true")
+    admin.add_argument("--allow-additional-admin", action="store_true")
     password_group = admin.add_mutually_exclusive_group()
     password_group.add_argument("--password")
     password_group.add_argument("--password-file")
@@ -112,7 +112,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "create-admin":
         password = read_password_file(args.password_file) if args.password_file else args.password
-        result = create_admin(args.username, password, only_if_admin_missing=args.only_if_admin_missing)
+        result = create_admin(args.username, password, only_if_admin_missing=not args.allow_additional_admin)
         if result is None:
             print("ADMIN_EXISTS")
         elif result:
