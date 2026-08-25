@@ -20,3 +20,80 @@ jobs:
         run: python -m pip install -r backend/requirements.txt -r requirements-dev.txt
       - name: Test
         run: ./testing.sh
+      - name: Full installer and Web UI smoke test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo ./install.sh --silent --result-json /root/chrislab-result.json
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/root/chrislab-result.json').read_text())
+          assert result['status'] == 'installed'
+          assert result['authentication'] == 'local'
+          assert result['authentication_modes'] == ['local', 'pam', 'ldap']
+          assert result['admin']['username'] == 'admin'
+          PY
+
+          sudo systemctl is-enabled --quiet bind9-web-manager
+          sudo systemctl is-active --quiet bind9-web-manager
+          sudo systemctl is-enabled --quiet nginx
+          sudo systemctl is-active --quiet nginx
+          sudo named-checkconf /etc/bind/named.conf
+
+          login_status() {
+            local username="$1" password="$2" jar="$3" page csrf
+            page="$(mktemp)"
+            curl -fsS -c "$jar" http://127.0.0.1/login -o "$page"
+            csrf="$(python3 - "$page" <<'PY'
+          import re, sys
+          text = open(sys.argv[1], encoding='utf-8').read()
+          match = re.search(r'name="csrf_token" value="([^"]+)"', text)
+          if not match:
+              raise SystemExit('CSRF token not found')
+          print(match.group(1))
+          PY
+          )"
+            curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
+              --data-urlencode "csrf_token=$csrf" \
+              --data-urlencode "username=$username" \
+              --data-urlencode "password=$password" \
+              http://127.0.0.1/login
+            rm -f "$page"
+          }
+
+          jar=/tmp/chrislab-cookie.txt
+          test "$(login_status admin admin "$jar")" = "303"
+          curl -fsS -b "$jar" http://127.0.0.1/ >/tmp/chrislab-dashboard.html
+          grep -q 'ChrisLab DNS' /tmp/chrislab-dashboard.html
+
+          curl -fsS -b "$jar" http://127.0.0.1/settings -o /tmp/chrislab-settings.html
+          csrf="$(python3 - <<'PY'
+          import re
+          text = open('/tmp/chrislab-settings.html', encoding='utf-8').read()
+          match = re.search(r'name="csrf_token" value="([^"]+)"', text)
+          if not match:
+              raise SystemExit('CSRF token not found')
+          print(match.group(1))
+          PY
+          )"
+          code="$(curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
+            --data-urlencode "csrf_token=$csrf" \
+            --data-urlencode 'current_password=admin' \
+            --data-urlencode 'new_username=chris' \
+            --data-urlencode 'new_password=1' \
+            http://127.0.0.1/settings/local-account)"
+          test "$code" = "303"
+
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar")" = "303"
+
+          sudo ./install.sh --silent --result-json /root/chrislab-result-rerun.json
+          sudo systemctl restart bind9-web-manager
+          sudo systemctl is-active --quiet bind9-web-manager
+
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar")" = "303"
+          rm -f "$jar"
+          test "$(login_status admin admin "$jar")" = "401"
