@@ -37,6 +37,7 @@ if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
 fi
 "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -r "$APP_DIR/backend/requirements.txt"
 install -o root -g root -m 0755 "$APP_DIR/scripts/privileged_helper.py" /usr/local/libexec/bind9-web-manager-helper
+install -o root -g root -m 0644 "$APP_DIR/config/pam-chrislab-dns" /etc/pam.d/chrislab-dns
 install -o root -g root -m 0644 "$APP_DIR/systemd/bind9-web-manager.service" /etc/systemd/system/bind9-web-manager.service
 install -o root -g root -m 0644 "$APP_DIR/nginx/bind9-web-manager.conf" /etc/nginx/sites-available/bind9-web-manager
 cd "$APP_DIR"
