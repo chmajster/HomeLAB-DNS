@@ -139,7 +139,7 @@ def authenticate_pam(username: str, password: str) -> bool:
         import pam
 
         client = pam.pam()
-        return bool(client.authenticate(username, password, service="chrislab-dns"))
+        return bool(client.authenticate(username, password, service="login"))
     except Exception:
         return False
 
