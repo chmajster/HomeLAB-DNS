@@ -338,6 +338,7 @@ chown root:root "$HELPER_CONF"
 chmod 0600 "$HELPER_CONF"
 install -o root -g root -m 0440 "$APP_DIR/config/sudoers" /etc/sudoers.d/bind9-web-manager
 visudo -cf /etc/sudoers.d/bind9-web-manager >/dev/null
+install -o root -g root -m 0644 "$APP_DIR/config/pam-chrislab-dns" /etc/pam.d/chrislab-dns
 
 if [[ ! -f "$BIND_MANAGED_CONFIG" ]]; then
   printf '%s\n' '// Managed by ChrisLab-DNS.' > "$BIND_MANAGED_CONFIG"
