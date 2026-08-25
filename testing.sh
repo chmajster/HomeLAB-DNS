@@ -41,6 +41,10 @@ run_isolated_bind_test() {
 
   local tmp port pid=""
   tmp="$(mktemp -d -t chrislab-dns-e2e.XXXXXX)"
+  # Ubuntu's named package may drop privileges to the bind user even when the
+  # test process was started by an unprivileged CI user. The disposable test
+  # directory therefore needs traversal/write permissions for that process.
+  chmod 0777 "$tmp"
   port="$((15353 + ($$ % 1000)))"
   cleanup_isolated() {
     local rc=$?
@@ -73,6 +77,7 @@ options {
 };
 zone "chrislab-e2e.test" { type primary; file "$tmp/db.chrislab-e2e.test"; };
 CONF
+  chmod 0644 "$tmp/named.conf" "$tmp/db.chrislab-e2e.test"
 
   cp -a "$tmp/named.conf" "$tmp/named.conf.snapshot"
   cp -a "$tmp/db.chrislab-e2e.test" "$tmp/db.chrislab-e2e.test.snapshot"
