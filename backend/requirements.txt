@@ -7,3 +7,6 @@ python-multipart>=0.0.20,<1
 argon2-cffi>=25.1,<26
 dnspython>=2.7,<3
 itsdangerous>=2.2,<3
+python-pam>=2.0,<3
+ldap3>=2.9,<3
+cryptography>=45,<46
