@@ -41,7 +41,18 @@ jobs:
             exit "$rc"
           }
           trap diagnostics ERR
-          set -x
+
+          wait_for_web() {
+            local url="${1:-http://127.0.0.1/login}"
+            for _ in $(seq 1 50); do
+              if curl -fsS "$url" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 0.2
+            done
+            echo "Web UI did not become ready: $url" >&2
+            return 1
+          }
 
           sudo ./install.sh --silent --result-json /root/chrislab-result.json
           sudo python3 - <<'PY'
@@ -59,6 +70,7 @@ jobs:
           sudo systemctl is-enabled --quiet nginx
           sudo systemctl is-active --quiet nginx
           sudo named-checkconf /etc/bind/named.conf
+          wait_for_web
 
           login_status() {
             local username="$1" password="$2" jar="$3" page csrf
@@ -110,6 +122,7 @@ jobs:
           sudo ./install.sh --silent --result-json /root/chrislab-result-rerun.json
           sudo systemctl restart bind9-web-manager
           sudo systemctl is-active --quiet bind9-web-manager
+          wait_for_web
 
           rm -f "$jar"
           test "$(login_status chris 1 "$jar")" = "303"
