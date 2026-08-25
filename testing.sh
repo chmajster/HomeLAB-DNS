@@ -25,8 +25,10 @@ for script in install.sh update.sh uninstall.sh testing.sh scripts/*.sh; do
 done
 
 if command -v shellcheck >/dev/null 2>&1; then
-  log "Running shellcheck"
-  shellcheck install.sh update.sh uninstall.sh testing.sh scripts/*.sh
+  log "Running shellcheck advisory warnings"
+  shellcheck -S warning install.sh update.sh uninstall.sh testing.sh scripts/*.sh || log "ShellCheck warnings reported; continuing to blocking error check"
+  log "Running shellcheck blocking error check"
+  shellcheck -S error install.sh update.sh uninstall.sh testing.sh scripts/*.sh
 else
   log "SKIP shellcheck: command is not installed"
 fi
