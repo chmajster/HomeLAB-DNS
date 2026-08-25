@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import secrets
+import struct
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .errors import AppError
 from .models import ApiToken, User
 from .permissions import ALL_PERMISSIONS, ROLE_PERMISSIONS
@@ -40,6 +45,66 @@ def token_digest(token: str) -> str:
 
 def create_api_token() -> str:
     return "cldns_" + secrets.token_urlsafe(36)
+
+
+def _fernet() -> Fernet:
+    digest = hashlib.sha256(get_settings().secret_key.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def encrypt_secret(value: str) -> str:
+    if not value:
+        return ""
+    return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return _fernet().decrypt(value.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError, UnicodeError):
+        return ""
+
+
+def generate_totp_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def _decode_totp_secret(secret: str) -> bytes:
+    normalized = "".join(secret.upper().split())
+    padding = "=" * ((8 - len(normalized) % 8) % 8)
+    return base64.b32decode(normalized + padding, casefold=True)
+
+
+def totp_code(secret: str, *, timestamp: int | float | None = None, step: int = 30, digits: int = 6) -> str:
+    moment = int(time.time() if timestamp is None else timestamp)
+    counter = moment // step
+    digest = hmac.new(_decode_totp_secret(secret), struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = (struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF) % (10**digits)
+    return f"{value:0{digits}d}"
+
+
+def verify_totp(secret: str, code: str, *, timestamp: int | float | None = None, skew: int = 1) -> bool:
+    candidate = "".join(code.split())
+    if len(candidate) != 6 or not candidate.isdigit():
+        return False
+    moment = int(time.time() if timestamp is None else timestamp)
+    return any(hmac.compare_digest(totp_code(secret, timestamp=moment + offset * 30), candidate) for offset in range(-skew, skew + 1))
+
+
+def generate_recovery_codes(count: int = 8) -> list[str]:
+    return [f"{secrets.token_hex(4)}-{secrets.token_hex(4)}" for _ in range(count)]
+
+
+def recovery_code_digest(code: str) -> str:
+    return token_digest(code.strip().lower())
+
+
+def totp_uri(secret: str, username: str, issuer: str = "ChrisLab DNS") -> str:
+    label = quote(f"{issuer}:{username}", safe="")
+    return f"otpauth://totp/{label}?secret={quote(secret)}&issuer={quote(issuer)}&algorithm=SHA1&digits=6&period=30"
 
 
 def permissions_for_user(user: User) -> set[str]:
