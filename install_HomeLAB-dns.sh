@@ -4,7 +4,6 @@ set -Eeuo pipefail
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_INSTALLER="$SOURCE_DIR/install.sh"
 DEFAULT_CONFIG="/root/configs/install_HomeLAB-dns.json"
-INSTALL_LOG="/var/log/chrislab-dns-install.log"
 ORIGINAL_ARGS=("$@")
 
 CONFIG_FILE="$DEFAULT_CONFIG"
@@ -14,17 +13,21 @@ SILENT=false
 RESULT_JSON=""
 
 FORWARD_DNS_SERVER=""
-PANEL_LOGIN=""
-PANEL_PASSWORD=""
+WEB_UI_IP="0.0.0.0"
+PUBLIC_PORT="81"
+PANEL_LOGIN="admin"
+PANEL_PASSWORD="admin"
 PANEL_PASSWORD_SOURCE_FILE=""
 PANEL_API_TOKEN=""
 PANEL_API_TOKEN_SOURCE_FILE=""
-WEB_UI_IP="0.0.0.0"
-PUBLIC_PORT="81"
 
 CLI_PROVISIONING=false
 CLI_FORWARD_DNS_SERVER=""
 CLI_FORWARD_DNS_SERVER_SET=false
+CLI_WEB_UI_IP=""
+CLI_WEB_UI_IP_SET=false
+CLI_PUBLIC_PORT=""
+CLI_PUBLIC_PORT_SET=false
 CLI_PANEL_LOGIN=""
 CLI_PANEL_LOGIN_SET=false
 CLI_PANEL_PASSWORD=""
@@ -35,10 +38,6 @@ CLI_PANEL_API_TOKEN=""
 CLI_PANEL_API_TOKEN_SET=false
 CLI_PANEL_API_TOKEN_FILE=""
 CLI_PANEL_API_TOKEN_FILE_SET=false
-CLI_WEB_UI_IP=""
-CLI_WEB_UI_IP_SET=false
-CLI_PUBLIC_PORT=""
-CLI_PUBLIC_PORT_SET=false
 
 BASE_CONFIG=""
 PASSWORD_FILE=""
@@ -50,44 +49,44 @@ usage() {
   cat <<'EOF'
 Usage: sudo ./install_HomeLAB-dns.sh [OPTIONS]
 
-Fully unattended installation:
+Unattended provisioning example:
   sudo ./install_HomeLAB-dns.sh --silent \
     --web-ui-ip 10.0.0.53 \
     --port 81 \
-    --forward-dns-server 1.1.1.1 \
-    --panel-login admin \
-    --panel-password 'PASSWORD'
+    --forward-dns-server 1.1.1.1
 
-Optional API token:
-  --panel-api-token 'cldns_CHANGE_ME_WITH_A_LONG_RANDOM_TOKEN_VALUE'
+Defaults:
+  panel login:    admin
+  panel password: admin
+  Web UI IP:      0.0.0.0
+  Web UI port:    81
 
 Provisioning options:
-  --web-ui-ip IP              IP address Nginx Web UI listens on.
-                               Default: 0.0.0.0 (all IPv4 interfaces + IPv6).
-  --port PORT                 Public Web UI port. Default: 81.
-  --forward-dns-server IP     Upstream DNS forwarder.
-  --panel-login LOGIN         Linux/PAM account used for Web UI login.
-  --panel-password PASSWORD   Linux/PAM account password. No installer length limit.
-  --panel-password-file FILE  Read Linux/PAM account password from a file.
-  --panel-api-token TOKEN     Optional API token (must start with cldns_).
-  --panel-api-token-file FILE Read optional API token from a file.
+  --forward-dns-server IP     Upstream DNS forwarder. Required for provisioning mode.
+  --web-ui-ip IP              Nginx Web UI listen address.
+  --port PORT                 Public Web UI port.
+  --panel-login LOGIN         Local ChrisLab DNS account. Default: admin.
+  --panel-password PASSWORD   Local ChrisLab DNS password. Default: admin.
+                              No installer length minimum is imposed.
+  --panel-password-file FILE  Read the local application password from a file.
+  --panel-api-token TOKEN     Optional API token; must start with cldns_.
+  --panel-api-token-file FILE Read the optional API token from a file.
 
 General options:
   --config FILE, --json FILE  Load provisioning settings from JSON.
-                               Default if present:
-                               /root/configs/install_HomeLAB-dns.json
-  --silent, --non-interactive No prompts and no normal stdout output.
+                              Default if present: /root/configs/install_HomeLAB-dns.json
+  --silent, --non-interactive Minimal-output installation.
   --result-json FILE          Write machine-readable installation result (0600).
   -h, --help                  Show this help.
 
-Precedence:
-  Command-line values override JSON values. Missing required values can be
-  supplied by JSON, CLI, or a mixture of both. panel_api_token is optional.
+Authentication:
+  The application starts with its local account database selected. Linux/PAM or
+  LDAP can be selected later in Settings -> Authentication. The installer never
+  needs to create or change a Linux login account for normal Web UI access.
 
 Security:
-  Passing passwords/tokens directly on the command line may expose them in shell
-  history or process listings. For automation prefer --panel-password-file and
-  --panel-api-token-file.
+  Command-line secrets can be visible in shell history/process listings. For
+  automation prefer --panel-password-file and --panel-api-token-file.
 EOF
 }
 
@@ -130,6 +129,13 @@ while (($#)); do
       RESULT_JSON="$2"
       shift 2
       ;;
+    --forward-dns-server)
+      need_value "$@"
+      CLI_FORWARD_DNS_SERVER="$2"
+      CLI_FORWARD_DNS_SERVER_SET=true
+      CLI_PROVISIONING=true
+      shift 2
+      ;;
     --web-ui-ip)
       need_value "$@"
       CLI_WEB_UI_IP="$2"
@@ -141,13 +147,6 @@ while (($#)); do
       need_value "$@"
       CLI_PUBLIC_PORT="$2"
       CLI_PUBLIC_PORT_SET=true
-      CLI_PROVISIONING=true
-      shift 2
-      ;;
-    --forward-dns-server)
-      need_value "$@"
-      CLI_FORWARD_DNS_SERVER="$2"
-      CLI_FORWARD_DNS_SERVER_SET=true
       CLI_PROVISIONING=true
       shift 2
       ;;
@@ -206,10 +205,7 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 [[ -x "$BASE_INSTALLER" ]] || fail "Base installer is missing or not executable: $BASE_INSTALLER"
-
-if [[ -n "$RESULT_JSON" && "$RESULT_JSON" != /* ]]; then
-  fail "--result-json must use an absolute path"
-fi
+[[ -z "$RESULT_JSON" || "$RESULT_JSON" == /* ]] || fail "--result-json must use an absolute path"
 
 validate_config_security() {
   local path="$1" mode owner
@@ -291,7 +287,7 @@ if "web_ui_ip" in data:
 if "panel_login" in data:
     value = text("panel_login")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
-        raise SystemExit("panel_login contains unsupported characters for a Linux account")
+        raise SystemExit("panel_login contains unsupported characters for an application account")
     values["PANEL_LOGIN"] = value
 if "panel_password" in data:
     values["PANEL_PASSWORD"] = text("panel_password")
@@ -342,19 +338,18 @@ run_base_without_provisioning() {
   exec "$BASE_INSTALLER" "${args[@]}"
 }
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  if [[ "$CONFIG_EXPLICIT" == true ]]; then
-    fail "Configuration file does not exist: $CONFIG_FILE"
-  elif [[ "$CLI_PROVISIONING" != true ]]; then
-    run_base_without_provisioning
-  fi
-else
+if [[ -f "$CONFIG_FILE" ]]; then
   validate_config_security "$CONFIG_FILE"
   load_config "$CONFIG_FILE"
+elif [[ "$CONFIG_EXPLICIT" == true ]]; then
+  fail "Configuration file does not exist: $CONFIG_FILE"
+elif [[ "$CLI_PROVISIONING" != true ]]; then
+  run_base_without_provisioning
 fi
 
 [[ "$CLI_FORWARD_DNS_SERVER_SET" == true ]] && FORWARD_DNS_SERVER="$CLI_FORWARD_DNS_SERVER"
 [[ "$CLI_WEB_UI_IP_SET" == true ]] && WEB_UI_IP="$CLI_WEB_UI_IP"
+[[ "$CLI_PUBLIC_PORT_SET" == true ]] && PUBLIC_PORT="$CLI_PUBLIC_PORT"
 [[ "$CLI_PANEL_LOGIN_SET" == true ]] && PANEL_LOGIN="$CLI_PANEL_LOGIN"
 if [[ "$CLI_PANEL_PASSWORD_SET" == true ]]; then
   PANEL_PASSWORD="$CLI_PANEL_PASSWORD"
@@ -370,7 +365,6 @@ elif [[ "$CLI_PANEL_API_TOKEN_FILE_SET" == true ]]; then
   PANEL_API_TOKEN=""
   PANEL_API_TOKEN_SOURCE_FILE="$CLI_PANEL_API_TOKEN_FILE"
 fi
-[[ "$CLI_PUBLIC_PORT_SET" == true ]] && PUBLIC_PORT="$CLI_PUBLIC_PORT"
 
 if [[ -n "$PANEL_PASSWORD_SOURCE_FILE" ]]; then
   validate_secret_file "$PANEL_PASSWORD_SOURCE_FILE" "panel password file"
@@ -387,27 +381,26 @@ import ipaddress
 import os
 import re
 
-required = {
-    "forward_dns_server": os.environ["FORWARD_DNS_SERVER"],
-    "panel_login": os.environ["PANEL_LOGIN"],
-    "panel_password": os.environ["PANEL_PASSWORD"],
-}
-missing = [name for name, value in required.items() if not value]
-if missing:
-    raise SystemExit("Missing provisioning option(s): " + ", ".join(missing))
-for name, value in required.items():
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
-        raise SystemExit(f"{name} must not contain control characters")
+forwarder = os.environ["FORWARD_DNS_SERVER"]
+if not forwarder:
+    raise SystemExit("Missing provisioning option(s): forward_dns_server")
 try:
-    ipaddress.ip_address(required["forward_dns_server"])
+    ipaddress.ip_address(forwarder)
 except ValueError as exc:
     raise SystemExit("forward_dns_server must be a valid IPv4 or IPv6 address") from exc
 try:
     ipaddress.ip_address(os.environ["WEB_UI_IP"])
 except ValueError as exc:
     raise SystemExit("web_ui_ip must be a valid IPv4 or IPv6 address") from exc
-if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", required["panel_login"]):
-    raise SystemExit("panel_login contains unsupported characters for a Linux account")
+username = os.environ["PANEL_LOGIN"]
+password = os.environ["PANEL_PASSWORD"]
+if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
+    raise SystemExit("panel_login contains unsupported characters for an application account")
+if not password:
+    raise SystemExit("panel_password must not be empty")
+for name, value in (("panel_login", username), ("panel_password", password)):
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SystemExit(f"{name} must not contain control characters")
 token = os.environ["PANEL_API_TOKEN"]
 if token and (not token.startswith("cldns_") or len(token) < 32):
     raise SystemExit("panel_api_token must start with 'cldns_' and contain at least 32 characters")
@@ -415,16 +408,6 @@ port_raw = os.environ["PUBLIC_PORT"]
 if not port_raw.isdigit() or not 1 <= int(port_raw) <= 65535:
     raise SystemExit("port must be an integer between 1 and 65535")
 PY
-
-# Provision the Web UI identity in the local Linux account database. PAM remains
-# the primary authentication source; the application DB is only authorization state.
-if ! getent passwd "$PANEL_LOGIN" >/dev/null; then
-  useradd --create-home --shell /bin/bash "$PANEL_LOGIN" \
-    || fail "Unable to create Linux/PAM account: $PANEL_LOGIN"
-fi
-printf '%s:%s\n' "$PANEL_LOGIN" "$PANEL_PASSWORD" | chpasswd \
-  || fail "Unable to set Linux/PAM password for $PANEL_LOGIN"
-log "Linux/PAM account configured: $PANEL_LOGIN"
 
 BASE_CONFIG="$(mktemp /run/homelab-dns-base-config.XXXXXX.json)"
 PASSWORD_FILE="$(mktemp /run/homelab-dns-panel-password.XXXXXX)"
@@ -488,7 +471,9 @@ if ! named-checkconf "$BIND_CONFIG"; then
   fail "BIND configuration validation failed; named.conf.options was restored"
 fi
 rm -f "$bind_backup"
-systemctl reload bind9
+BIND_SERVICE="$(systemctl show -p Id --value bind9.service 2>/dev/null || true)"
+[[ -n "$BIND_SERVICE" ]] || BIND_SERVICE="bind9.service"
+systemctl reload "$BIND_SERVICE"
 
 NGINX_SITE="/etc/nginx/sites-available/bind9-web-manager"
 [[ -f "$NGINX_SITE" && ! -L "$NGINX_SITE" ]] || fail "Nginx site file is missing or unsafe: $NGINX_SITE"
@@ -597,7 +582,9 @@ api_token_configured=false
 
 if [[ -n "$RESULT_JSON" ]]; then
   result_parent="$(dirname "$RESULT_JSON")"
-  if [[ ! -d "$result_parent" ]]; then install -d -o root -g root -m 0700 "$result_parent"; fi
+  if [[ ! -d "$result_parent" ]]; then
+    install -d -o root -g root -m 0700 "$result_parent"
+  fi
   [[ ! -L "$result_parent" && "$(stat -c %u "$result_parent")" == 0 ]] || fail "--result-json parent must be root-owned and not a symlink"
   result_parent_mode="$(stat -c %a "$result_parent")"
   (( (8#$result_parent_mode & 8#022) == 0 )) || fail "--result-json parent must not be group/world writable"
@@ -619,21 +606,33 @@ result["port"] = int(os.environ["PUBLIC_PORT"])
 result["forward_dns_server"] = os.environ["FORWARD_DNS_SERVER"]
 result["provisioning_config"] = os.environ["PROVISIONING_CONFIG"] or None
 result["api_token_configured"] = os.environ["API_TOKEN_CONFIGURED"] == "true"
-result["authentication"] = "pam"
+result["authentication"] = "local"
+result["authentication_modes"] = ["local", "pam", "ldap"]
 path = Path(os.environ["RESULT_JSON"])
 path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 path.chmod(0o600)
 PY
 fi
 
-if [[ "$SILENT" == true ]]; then exit 0; fi
+if [[ "$SILENT" == true ]]; then
+  exit 0
+fi
+
 echo "HomeLAB-DNS installation completed."
 echo "Panel URL: $panel_url"
-echo "Authentication: Linux/PAM (LDAP can be enabled later in Settings)"
+echo "Authentication: local application account (PAM or LDAP can be selected in Settings)"
 echo "Web UI listen IP: $WEB_UI_IP"
 echo "Web UI port: $PUBLIC_PORT"
 echo "Forward DNS server: $FORWARD_DNS_SERVER"
 echo "Panel login: $PANEL_LOGIN"
 echo "API token configured: $api_token_configured"
-if [[ "$CONFIG_LOADED" == true ]]; then echo "Provisioning config: $CONFIG_FILE"; else echo "Provisioning source: command line"; fi
+if [[ "$PANEL_LOGIN" == "admin" && "$PANEL_PASSWORD" == "admin" ]]; then
+  echo "Default credentials: admin / admin"
+  echo "Change the default credentials after the first login."
+fi
+if [[ "$CONFIG_LOADED" == true ]]; then
+  echo "Provisioning config: $CONFIG_FILE"
+else
+  echo "Provisioning source: command line"
+fi
 [[ -n "$RESULT_JSON" ]] && echo "Installation result: $RESULT_JSON"
