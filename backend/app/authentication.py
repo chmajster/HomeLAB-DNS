@@ -230,14 +230,13 @@ def ensure_authorization_profile(db: Session, username: str, auth_type: str) -> 
             db.commit()
         return user
 
-    enabled_external_admins = db.scalar(
+    enabled_admins = db.scalar(
         select(func.count(User.id)).where(
             User.role == "administrator",
             User.enabled.is_(True),
-            User.password_hash == EXTERNAL_PASSWORD_MARKER,
         )
     ) or 0
-    if enabled_external_admins == 0:
+    if enabled_admins == 0:
         role = "administrator"
     elif auth_type == "ldap":
         role = get_ldap_settings(db).default_role
