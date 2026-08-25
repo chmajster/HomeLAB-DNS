@@ -9,9 +9,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .authentication import (
+    EXTERNAL_PASSWORD_MARKER,
     authenticate_identity,
     ensure_authorization_profile,
+    get_auth_mode,
     get_ldap_settings,
+    save_auth_mode,
     save_ldap_settings,
     test_ldap_connection,
 )
@@ -19,7 +22,7 @@ from .database import get_db
 from .errors import AppError
 from .models import ApiToken, AppState, AuditLog, Backup, Record, User, Zone
 from .permissions import ROLE_PERMISSIONS
-from .security import ensure_csrf, ensure_csrf_token, get_client_ip, rate_limiter
+from .security import ensure_csrf, ensure_csrf_token, get_client_ip, hash_password, rate_limiter, verify_password
 from .services.bind import BindService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +57,7 @@ def _context(request: Request, db: Session, **extra):
         "permissions": ROLE_PERMISSIONS.get(user.role, set()) if user else set(),
         "theme": user.theme if user else "system",
         "auth_type": request.session.get("auth_type") if user else None,
+        "auth_mode": get_auth_mode(db),
     }
     data.update(extra)
     return data
@@ -63,8 +67,7 @@ def _context(request: Request, db: Session, **extra):
 def login_page(request: Request, db: Session = Depends(get_db)):
     if _current_user(request, db):
         return RedirectResponse("/", status_code=303)
-    ldap = get_ldap_settings(db)
-    return templates.TemplateResponse(request, "login.html", _context(request, db, ldap_enabled=ldap.enabled))
+    return templates.TemplateResponse(request, "login.html", _context(request, db))
 
 
 @router.post("/login")
@@ -84,12 +87,7 @@ def login(
         return templates.TemplateResponse(
             request,
             "login.html",
-            _context(
-                request,
-                db,
-                error="Nieprawidłowa nazwa użytkownika lub hasło.",
-                ldap_enabled=get_ldap_settings(db).enabled,
-            ),
+            _context(request, db, error="Nieprawidłowa nazwa użytkownika lub hasło."),
             status_code=401,
         )
 
@@ -98,12 +96,7 @@ def login(
         return templates.TemplateResponse(
             request,
             "login.html",
-            _context(
-                request,
-                db,
-                error="Konto jest wyłączone w ChrisLab DNS.",
-                ldap_enabled=get_ldap_settings(db).enabled,
-            ),
+            _context(request, db, error="Konto jest wyłączone w ChrisLab DNS."),
             status_code=403,
         )
 
@@ -256,6 +249,7 @@ def settings_page(request: Request, db: Session = Depends(get_db)):
             ldap_bind_password_set=bool(ldap.bind_password),
             can_manage_auth="settings.manage" in ROLE_PERMISSIONS.get(user.role, set()),
             saved=request.query_params.get("saved") == "1",
+            account_saved=request.query_params.get("account_saved") == "1",
             ldap_test=request.query_params.get("ldap_test", ""),
         ),
     )
@@ -277,20 +271,48 @@ def update_theme(
     return RedirectResponse("/settings", status_code=303)
 
 
+@router.post("/settings/local-account")
+def update_local_account(
+    request: Request,
+    csrf_token: str = Form(...),
+    current_password: str = Form(...),
+    new_username: str = Form(...),
+    new_password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = _require_user(request, db)
+    ensure_csrf(request, csrf_token)
+    if user.password_hash == EXTERNAL_PASSWORD_MARKER or not verify_password(user.password_hash, current_password):
+        raise AppError("INVALID_CURRENT_PASSWORD", "Current local password is incorrect", 403)
+    username = new_username.strip()
+    if not username or len(username) > 80 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-" for ch in username):
+        raise AppError("INVALID_USERNAME", "Username contains unsupported characters", 422)
+    if not new_password:
+        raise AppError("INVALID_PASSWORD", "New password must not be empty", 422)
+    existing = db.scalar(select(User.id).where(User.username == username, User.id != user.id))
+    if existing is not None:
+        raise AppError("USER_EXISTS", "Username already exists", 409)
+    user.username = username
+    user.password_hash = hash_password(new_password)
+    db.commit()
+    request.session["auth_type"] = "local"
+    return RedirectResponse("/settings?account_saved=1", status_code=303)
+
+
 @router.post("/settings/authentication")
 def update_authentication_settings(
     request: Request,
     csrf_token: str = Form(...),
-    ldap_enabled: str | None = Form(None),
-    ldap_url: str = Form(...),
+    auth_mode: str = Form(...),
+    ldap_url: str = Form("ldap://127.0.0.1:389"),
     ldap_start_tls: str | None = Form(None),
     ldap_verify_tls: str | None = Form(None),
-    ldap_base_dn: str = Form(...),
+    ldap_base_dn: str = Form(""),
     ldap_bind_dn: str = Form(""),
     ldap_bind_password: str = Form(""),
     ldap_clear_bind_password: str | None = Form(None),
-    ldap_user_filter: str = Form(...),
-    ldap_default_role: str = Form(...),
+    ldap_user_filter: str = Form("(&(objectClass=person)(uid={username}))"),
+    ldap_default_role: str = Form("read_only"),
     db: Session = Depends(get_db),
 ):
     user = _require_user(request, db)
@@ -298,21 +320,23 @@ def update_authentication_settings(
     if "settings.manage" not in ROLE_PERMISSIONS.get(user.role, set()):
         raise AppError("FORBIDDEN", "Permission required: settings.manage", 403)
     try:
-        save_ldap_settings(
-            db,
-            enabled=ldap_enabled == "on",
-            url=ldap_url,
-            start_tls=ldap_start_tls == "on",
-            verify_tls=ldap_verify_tls == "on",
-            base_dn=ldap_base_dn,
-            bind_dn=ldap_bind_dn,
-            bind_password=ldap_bind_password or None,
-            clear_bind_password=ldap_clear_bind_password == "on",
-            user_filter=ldap_user_filter,
-            default_role=ldap_default_role,
-        )
+        if auth_mode == "ldap" or ldap_base_dn.strip():
+            save_ldap_settings(
+                db,
+                enabled=auth_mode == "ldap",
+                url=ldap_url,
+                start_tls=ldap_start_tls == "on",
+                verify_tls=ldap_verify_tls == "on",
+                base_dn=ldap_base_dn,
+                bind_dn=ldap_bind_dn,
+                bind_password=ldap_bind_password or None,
+                clear_bind_password=ldap_clear_bind_password == "on",
+                user_filter=ldap_user_filter,
+                default_role=ldap_default_role,
+            )
+        save_auth_mode(db, auth_mode)
     except ValueError as exc:
-        raise AppError("INVALID_LDAP_SETTINGS", str(exc), 422) from exc
+        raise AppError("INVALID_AUTH_SETTINGS", str(exc), 422) from exc
     return RedirectResponse("/settings?saved=1", status_code=303)
 
 
