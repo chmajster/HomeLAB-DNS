@@ -18,7 +18,7 @@ if ask "Uninstall the BIND9 packages themselves?"; then remove_bind=true; fi
 if $remove_app; then
   systemctl disable --now bind9-web-manager 2>/dev/null || true
   rm -f /etc/systemd/system/bind9-web-manager.service /etc/nginx/sites-enabled/bind9-web-manager /etc/nginx/sites-available/bind9-web-manager
-  rm -f /etc/sudoers.d/bind9-web-manager /usr/local/libexec/bind9-web-manager-helper /etc/bind9-web-manager-helper.conf
+  rm -f /etc/sudoers.d/bind9-web-manager /usr/local/libexec/bind9-web-manager-helper /etc/bind9-web-manager-helper.conf /etc/pam.d/chrislab-dns
   rm -rf /opt/bind9-web-manager
   systemctl daemon-reload
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
