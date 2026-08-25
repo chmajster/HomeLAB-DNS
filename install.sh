@@ -396,10 +396,8 @@ elif [[ -n "$ADMIN_PASSWORD" ]]; then
   admin_pam_password="$ADMIN_PASSWORD"
 fi
 
-pam_account_created=false
 if ! getent passwd "$ADMIN_USERNAME" >/dev/null; then
   useradd --create-home --shell /bin/bash "$ADMIN_USERNAME" || fail "Unable to create Linux/PAM administrator account: $ADMIN_USERNAME"
-  pam_account_created=true
   if [[ -z "$admin_pam_password" ]]; then
     admin_pam_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
     ONE_TIME_PAM_PASSWORD="$admin_pam_password"
@@ -423,7 +421,7 @@ if [[ -n "$admin_pam_password" ]]; then
   chmod 0400 "$ADMIN_SECRET_TEMP"
   admin_args+=(--password-file "$ADMIN_SECRET_TEMP")
 fi
-admin_output="$(cd "$APP_DIR" && runuser -u "$APP_USER" -- env ENV_FILE="$ENV_FILE" "$APP_DIR/.venv/bin/python" -m backend.app.cli "${admin_args[@]}")"
+(cd "$APP_DIR" && runuser -u "$APP_USER" -- env ENV_FILE="$ENV_FILE" "$APP_DIR/.venv/bin/python" -m backend.app.cli "${admin_args[@]}") >/dev/null
 rm -f "$ADMIN_SECRET_TEMP"
 ADMIN_SECRET_TEMP=""
 
