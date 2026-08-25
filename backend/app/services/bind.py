@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
-import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +59,10 @@ class BindService:
         )
         self._require_ok(result, "BIND_APPLY_FAILED", "BIND transaction failed")
 
+    def apply_managed_config(self, staged_managed: Path) -> None:
+        result = self._run_helper("apply-managed-config", "--staged-managed", str(staged_managed), timeout=60)
+        self._require_ok(result, "BIND_APPLY_FAILED", "BIND managed configuration transaction failed")
+
     def remove_zone(self, zone: str, target: str, staged_managed: Path) -> None:
         result = self._run_helper(
             "remove-zone", "--zone", zone, "--target", target,
@@ -72,6 +72,9 @@ class BindService:
 
     def reload(self) -> None:
         self._require_ok(self._run_helper("reload", timeout=45), "BIND_RELOAD_FAILED", "BIND reload failed")
+
+    def retransfer(self, zone: str) -> None:
+        self._require_ok(self._run_helper("retransfer", "--zone", zone, timeout=45), "BIND_RETRANSFER_FAILED", "Secondary zone retransfer failed")
 
     def restart(self) -> None:
         self._require_ok(self._run_helper("restart", timeout=60), "BIND_RESTART_FAILED", "BIND restart failed")
