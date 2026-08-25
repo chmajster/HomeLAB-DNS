@@ -250,7 +250,47 @@ install -d -o root -g root -m 0755 "$APP_DIR"
 if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
   rsync -a --delete --exclude '.git/' --exclude '.env' --exclude '.venv/' --exclude 'venv/' "$SOURCE_DIR/" "$APP_DIR/"
 fi
-python3 -m venv "$APP_DIR/.venv"
+
+ensure_venv_executable() {
+  local venv_dir="$APP_DIR/.venv"
+  local mount_options=""
+
+  if command -v findmnt >/dev/null 2>&1; then
+    mount_options="$(findmnt -T "$APP_DIR" -no OPTIONS 2>/dev/null || true)"
+    if [[ ",${mount_options}," == *,noexec,* ]]; then
+      fail "$APP_DIR is on a filesystem mounted with noexec. Remount it with exec before installing ChrisLab-DNS."
+    fi
+  fi
+
+  if [[ -d "$venv_dir" ]]; then
+    chmod -R a+rX "$venv_dir" 2>/dev/null || true
+    if [[ ! -x "$venv_dir/bin/python" ]] || ! runuser -u "$APP_USER" -- "$venv_dir/bin/python" -c 'import sys' >/dev/null 2>&1; then
+      log "Existing Python virtualenv is not executable by $APP_USER; recreating it."
+      rm -rf "$venv_dir"
+    fi
+  fi
+
+  if [[ ! -x "$venv_dir/bin/python" ]]; then
+    rm -rf "$venv_dir"
+    python3 -m venv "$venv_dir"
+  fi
+
+  chmod -R a+rX "$venv_dir"
+
+  if ! runuser -u "$APP_USER" -- "$venv_dir/bin/python" -c 'import sys; print(sys.executable)' >/dev/null 2>&1; then
+    {
+      echo "Virtualenv execution diagnostics:"
+      echo "APP_DIR=$APP_DIR"
+      echo "mount_options=${mount_options:-unknown}"
+      namei -l "$venv_dir/bin/python" 2>&1 || true
+      ls -ld "$APP_DIR" "$venv_dir" "$venv_dir/bin" "$venv_dir/bin/python"* 2>&1 || true
+    } >>"$INSTALL_LOG"
+    fail "Python virtualenv is not executable by $APP_USER. Check permissions and mount options. Diagnostics: $INSTALL_LOG"
+  fi
+}
+
+ensure_venv_executable
+
 if [[ "$SILENT" == true ]]; then
   run_logged "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -q --upgrade pip
   run_logged "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -q -r "$APP_DIR/backend/requirements.txt"
