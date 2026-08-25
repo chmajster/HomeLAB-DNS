@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import AppState, User
+from .security import verify_password
 
 
 EXTERNAL_PASSWORD_MARKER = "!external-auth!"
+AUTH_MODE_KEY = "auth.mode"
+AUTH_MODES = {"local", "pam", "ldap"}
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,19 @@ def _state_set(db: Session, key: str, value: str) -> None:
         db.add(AppState(key=key, value=value))
     else:
         row.value = value
+
+
+def get_auth_mode(db: Session) -> str:
+    mode = _state_get(db, AUTH_MODE_KEY, "local").strip().lower()
+    return mode if mode in AUTH_MODES else "local"
+
+
+def save_auth_mode(db: Session, mode: str) -> None:
+    normalized = mode.strip().lower()
+    if normalized not in AUTH_MODES:
+        raise ValueError("Authentication mode must be local, pam or ldap")
+    _state_set(db, AUTH_MODE_KEY, normalized)
+    db.commit()
 
 
 def _bool_value(value: str, default: bool = False) -> bool:
@@ -133,6 +149,15 @@ def save_ldap_settings(
     elif bind_password:
         _state_set(db, LDAP_KEYS["bind_password"], _encrypt_secret(bind_password))
     db.commit()
+
+
+def authenticate_local(db: Session, username: str, password: str) -> bool:
+    if not username or not password:
+        return False
+    user = db.scalar(select(User).where(User.username == username, User.enabled.is_(True)))
+    if user is None or user.password_hash == EXTERNAL_PASSWORD_MARKER:
+        return False
+    return verify_password(user.password_hash, password)
 
 
 def authenticate_pam(username: str, password: str) -> bool:
@@ -215,9 +240,12 @@ def test_ldap_connection(db: Session) -> tuple[bool, str]:
 
 def authenticate_identity(db: Session, username: str, password: str) -> str | None:
     username = username.strip()
-    if authenticate_pam(username, password):
+    mode = get_auth_mode(db)
+    if mode == "local" and authenticate_local(db, username, password):
+        return "local"
+    if mode == "pam" and authenticate_pam(username, password):
         return "pam"
-    if authenticate_ldap(db, username, password):
+    if mode == "ldap" and authenticate_ldap(db, username, password):
         return "ldap"
     return None
 
@@ -225,9 +253,6 @@ def authenticate_identity(db: Session, username: str, password: str) -> str | No
 def ensure_authorization_profile(db: Session, username: str, auth_type: str) -> User:
     user = db.scalar(select(User).where(User.username == username))
     if user is not None:
-        if user.password_hash != EXTERNAL_PASSWORD_MARKER:
-            user.password_hash = EXTERNAL_PASSWORD_MARKER
-            db.commit()
         return user
 
     enabled_admins = db.scalar(
