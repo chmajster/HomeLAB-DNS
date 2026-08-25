@@ -16,15 +16,21 @@ def test_argon2id_password_hash():
     assert not verify_password(hashed, "wrong")
 
 
-def test_migrate_bootstraps_default_local_admin(db):
-    cli.migrate()
+def test_create_admin_bootstraps_default_local_credentials(db):
+    assert cli.create_admin("admin", "admin") == ""
     db.expire_all()
     user = db.scalar(select(User).where(User.username == "admin"))
     assert user is not None
     assert user.role == "administrator"
     assert user.enabled is True
     assert verify_password(user.password_hash, "admin")
+
+
+def test_migrate_initializes_local_auth_mode_without_creating_account(db):
+    cli.migrate()
+    db.expire_all()
     assert get_auth_mode(db) == "local"
+    assert db.scalar(select(User.id).limit(1)) is None
 
 
 def test_migrate_does_not_reset_existing_credentials(db):
