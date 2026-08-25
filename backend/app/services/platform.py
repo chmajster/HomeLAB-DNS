@@ -128,3 +128,23 @@ class DnsPlatformService:
         if not secret:
             raise AppError("TSIG_SECRET_UNAVAILABLE", "TSIG secret cannot be decrypted", 500)
         return secret
+
+
+# ZoneService already owns the transactional zone/BIND apply path. Expose a
+# config refresh method there without duplicating privileged-helper logic. This
+# is used after TSIG rotation/deletion so database and active BIND state change
+# within the same request transaction.
+def _install_zone_config_refresh() -> None:
+    from .zones import ZoneService
+
+    def apply_managed_config_only(self: ZoneService, reason: str, username: str) -> None:
+        carrier = self.db.scalar(select(Zone).where(Zone.managed.is_(True)).order_by(Zone.id).limit(1))
+        if carrier is None:
+            return
+        self._apply(carrier, reason, username)
+
+    if not hasattr(ZoneService, "apply_managed_config_only"):
+        setattr(ZoneService, "apply_managed_config_only", apply_managed_config_only)
+
+
+_install_zone_config_refresh()
