@@ -18,12 +18,12 @@ from ..services.zones import ZoneService
 router = APIRouter(tags=["DNS Platform"])
 
 
-def _refresh_managed_config(db: Session, username: str, reason: str) -> None:
-    carrier = db.scalar(select(Zone).where(Zone.managed.is_(True)).order_by(Zone.id).limit(1))
-    if carrier is None:
-        return
-    ZoneService(db)._apply(carrier, reason, username)
-    db.commit()
+def _refresh_tsig_usage(db: Session, key_name: str, username: str, reason: str) -> None:
+    carrier = db.scalar(
+        select(Zone).where(Zone.managed.is_(True), Zone.tsig_key_name == key_name).order_by(Zone.id).limit(1)
+    )
+    if carrier is not None:
+        ZoneService(db)._apply(carrier, reason, username)
 
 
 @router.get("/servers", response_model=list[DnsServerOut], summary="List DNS servers", description="Requires zones.read.")
@@ -116,7 +116,7 @@ def create_tsig_key(
     return TsigKeyCreated(id=row.id, name=row.name, algorithm=row.algorithm, created_at=row.created_at, secret=secret)
 
 
-@router.post("/tsig-keys/{key_id}/rotate", response_model=TsigKeyCreated, summary="Rotate a TSIG key", description="Requires settings.manage. The new plaintext secret is returned exactly once and active managed BIND configuration is refreshed.")
+@router.post("/tsig-keys/{key_id}/rotate", response_model=TsigKeyCreated, summary="Rotate a TSIG key", description="Requires settings.manage. The new plaintext secret is returned exactly once. BIND is updated transactionally before the database commit.")
 def rotate_tsig_key(
     key_id: int,
     request: Request,
@@ -127,13 +127,24 @@ def rotate_tsig_key(
     row = db.get(TsigKey, key_id)
     if row is None:
         raise AppError("TSIG_KEY_NOT_FOUND", "TSIG key not found", 404)
-    secret = DnsPlatformService(db).rotate_tsig_key(row)
-    _refresh_managed_config(db, principal.username, f"before ROTATE_TSIG {row.name}")
+    old_secret = row.secret_encrypted
+    service = DnsPlatformService(db)
+    secret = service.rotate_tsig_key(row, commit=False)
+    try:
+        _refresh_tsig_usage(db, row.name, principal.username, f"before ROTATE_TSIG {row.name}")
+        db.commit()
+    except Exception:
+        db.rollback()
+        restored = db.get(TsigKey, key_id)
+        if restored is not None:
+            restored.secret_encrypted = old_secret
+            db.commit()
+        raise
     write_audit(db, principal, get_client_ip(request), "ROTATE_TSIG_KEY", "SUCCESS", new_value={"name": row.name})
     return TsigKeyCreated(id=row.id, name=row.name, algorithm=row.algorithm, created_at=row.created_at, secret=secret)
 
 
-@router.delete("/tsig-keys/{key_id}", status_code=204, summary="Delete an unused TSIG key", description="Requires settings.manage.")
+@router.delete("/tsig-keys/{key_id}", status_code=204, summary="Delete an unused TSIG key", description="Requires settings.manage. Keys referenced by a zone or DNS server cannot be deleted.")
 def delete_tsig_key(
     key_id: int,
     request: Request,
@@ -146,6 +157,5 @@ def delete_tsig_key(
         raise AppError("TSIG_KEY_NOT_FOUND", "TSIG key not found", 404)
     name = row.name
     DnsPlatformService(db).delete_tsig_key(row)
-    _refresh_managed_config(db, principal.username, f"before DELETE_TSIG {name}")
     write_audit(db, principal, get_client_ip(request), "DELETE_TSIG_KEY", "SUCCESS", old_value={"name": name})
     return Response(status_code=204)
