@@ -109,6 +109,7 @@ cleanup() {
   [[ -n "$TOKEN_FILE" ]] && rm -f "$TOKEN_FILE"
   [[ -n "$NORMALIZED_CONFIG" ]] && rm -f "$NORMALIZED_CONFIG"
   [[ -n "$BASE_RESULT_JSON" ]] && rm -f "$BASE_RESULT_JSON"
+  return 0
 }
 trap cleanup EXIT
 
@@ -449,7 +450,7 @@ from pathlib import Path
 path = Path(sys.argv[1])
 forwarder = os.environ["FORWARD_DNS_SERVER"]
 text = path.read_text(encoding="utf-8")
-forwarders = re.compile(r"\bforwarders\s*\{[^{}]*\}\s*;", re.IGNORECASE | re.DOTALL)
+forwarders = re.compile(r"^[ \t]*forwarders\s*\{[^{}]*\}\s*;", re.IGNORECASE | re.DOTALL | re.MULTILINE)
 block = f"forwarders {{\n        {forwarder};\n    }};"
 if forwarders.search(text):
     text = forwarders.sub(block, text, count=1)
