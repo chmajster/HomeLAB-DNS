@@ -1,0 +1,4 @@
+# ChrisLab DNS Web UI authentication
+# Debian/Ubuntu PAM stack
+@include common-auth
+@include common-account
