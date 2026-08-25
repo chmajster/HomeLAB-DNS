@@ -411,7 +411,12 @@ rm -f "$ADMIN_SECRET_TEMP"
 ADMIN_SECRET_TEMP=""
 
 run_logged systemctl daemon-reload
-run_logged systemctl enable --now bind9
+BIND_SERVICE="$(systemctl show -p Id --value bind9.service 2>/dev/null || true)"
+if [[ -z "$BIND_SERVICE" ]]; then
+  BIND_SERVICE="bind9.service"
+fi
+log "Using BIND systemd unit: $BIND_SERVICE"
+run_logged systemctl enable --now "$BIND_SERVICE"
 run_logged named-checkconf "$BIND_CONFIG"
 run_logged systemctl enable --now bind9-web-manager
 run_logged systemctl enable --now nginx
