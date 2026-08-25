@@ -77,6 +77,7 @@ run_logged() {
 
 cleanup() {
   [[ -n "$ADMIN_SECRET_TEMP" ]] && rm -f "$ADMIN_SECRET_TEMP"
+  return 0
 }
 trap cleanup EXIT
 
