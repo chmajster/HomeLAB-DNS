@@ -8,7 +8,7 @@
 
 <div class="card mt-3"><div class="card-body">
 <h2 class="h5">Authentication</h2>
-<p class="mb-2"><strong>Linux / PAM</strong> is always enabled and is the primary authentication source. ChrisLab DNS validates the username and password through the standard local Linux PAM <code>login</code> service.</p>
+<p class="mb-2"><strong>Linux / PAM</strong> is always enabled and is the primary authentication source. ChrisLab DNS validates credentials through the dedicated <code>chrislab-dns</code> PAM service, which uses the distribution's local authentication and account policy.</p>
 <p class="text-body-secondary">The application database stores authorization profiles, roles, session preferences and API tokens. It is not the primary password database for Web UI login.</p>
 
 {% if can_manage_auth %}
