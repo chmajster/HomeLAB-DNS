@@ -120,7 +120,9 @@ def test_invalid_auth_mode_is_rejected(db):
         raise AssertionError("invalid authentication mode was accepted")
 
 
-def test_first_external_identity_bootstraps_administrator(db):
+def test_first_external_identity_bootstraps_administrator_even_with_local_admin(db):
+    db.add(User(username="local-admin", password_hash=hash_password("secret"), role="administrator", enabled=True))
+    db.commit()
     user = authentication.ensure_authorization_profile(db, "first-linux-user", "pam")
     assert user.role == "administrator"
     assert user.password_hash == EXTERNAL_PASSWORD_MARKER
@@ -136,8 +138,8 @@ def test_existing_local_profile_is_not_rewritten_by_external_login(db):
     assert result.password_hash == original_hash
 
 
-def test_ldap_default_role_is_used_after_bootstrap(db):
-    db.add(User(username="local-admin", password_hash=hash_password("secret"), role="administrator", enabled=True))
+def test_ldap_default_role_is_used_after_external_bootstrap(db):
+    db.add(User(username="external-admin", password_hash=EXTERNAL_PASSWORD_MARKER, role="administrator", enabled=True))
     db.commit()
     authentication.save_ldap_settings(
         db,
