@@ -228,8 +228,10 @@ fi
 install -d -o "$APP_USER" -g "$APP_GROUP" -m 0750 "$DATA_DIR" "$BACKUP_DIR" "$STAGING_DIR"
 install -d -o root -g root -m 0700 "$HELPER_STATE_DIR"
 if [[ ! -f "$BACKUP_SIGNING_KEY" ]]; then
-  umask 077
-  python3 -c 'import secrets; print(secrets.token_hex(32))' > "$BACKUP_SIGNING_KEY"
+  (
+    umask 077
+    python3 -c 'import secrets; print(secrets.token_hex(32))' > "$BACKUP_SIGNING_KEY"
+  )
 fi
 chown root:root "$BACKUP_SIGNING_KEY"
 chmod 0600 "$BACKUP_SIGNING_KEY"
@@ -292,6 +294,15 @@ if [[ "$SILENT" == true ]]; then
 else
   "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check --upgrade pip
   "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -r "$APP_DIR/backend/requirements.txt"
+fi
+chmod -R a+rX "$APP_DIR/.venv"
+if ! runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c 'import argon2, greenlet, pydantic_core, cryptography, fastapi, sqlalchemy' >/dev/null 2>&1; then
+  {
+    echo "Virtualenv dependency import diagnostics:"
+    namei -l "$APP_DIR/.venv/bin/python" 2>&1 || true
+    find "$APP_DIR/.venv" -type f ! -perm -004 -print 2>/dev/null | head -n 50 || true
+  } >>"$INSTALL_LOG"
+  fail "Python virtualenv dependencies are not readable/executable by $APP_USER. Diagnostics: $INSTALL_LOG"
 fi
 chown -R root:root "$APP_DIR"
 
