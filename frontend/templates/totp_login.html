@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block title %}Weryfikacja 2FA · ChrisLab DNS{% endblock %}{% block anonymous %}
+<div class="min-vh-100 d-flex align-items-center justify-content-center bg-body-tertiary p-3"><div class="card shadow-sm login-card"><div class="card-body p-4">
+<h1 class="h4 mb-1">Weryfikacja dwuetapowa</h1><p class="text-body-secondary mb-4">Wpisz 6-cyfrowy kod z aplikacji uwierzytelniającej albo jednorazowy kod odzyskiwania.</p>
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+<form method="post" action="/login/totp"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="mb-3"><label class="form-label">Kod 2FA</label><input class="form-control font-monospace" name="code" autocomplete="one-time-code" inputmode="numeric" autofocus required></div><button class="btn btn-primary w-100">Zweryfikuj</button></form>
+</div></div></div>
+{% endblock %}
