@@ -50,6 +50,12 @@ def test_json_install_config_normalizes_values(tmp_path: Path) -> None:
     assert data["SYNC_EXISTING"] == "false"
 
 
+def test_json_install_config_accepts_short_nonempty_admin_password(tmp_path: Path) -> None:
+    result = run_parser(tmp_path, {"admin": {"username": "admin", "password": "1"}})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["ADMIN_PASSWORD"] == "1"
+
+
 def test_json_install_config_rejects_unsafe_data_dir(tmp_path: Path) -> None:
     result = run_parser(tmp_path, {"app": {"data_dir": "/etc"}})
     assert result.returncode == 2
