@@ -25,6 +25,24 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          diagnostics() {
+            local rc=$?
+            set +e
+            echo "=== installer log ==="
+            sudo tail -n 120 /var/log/chrislab-dns-install.log 2>/dev/null || true
+            echo "=== service status ==="
+            sudo systemctl --no-pager -l status bind9-web-manager bind9 nginx 2>/dev/null || true
+            echo "=== application journal ==="
+            sudo journalctl -u bind9-web-manager -n 120 --no-pager 2>/dev/null || true
+            echo "=== nginx journal ==="
+            sudo journalctl -u nginx -n 80 --no-pager 2>/dev/null || true
+            echo "=== listeners ==="
+            sudo ss -ltnp 2>/dev/null || true
+            exit "$rc"
+          }
+          trap diagnostics ERR
+          set -x
+
           sudo ./install.sh --silent --result-json /root/chrislab-result.json
           sudo python3 - <<'PY'
           import json
