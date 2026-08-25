@@ -39,12 +39,17 @@ run_isolated_bind_test() {
     return 0
   fi
 
-  local tmp port pid=""
-  tmp="$(mktemp -d -t chrislab-dns-e2e.XXXXXX)"
-  # Ubuntu's named package may drop privileges to the bind user even when the
-  # test process was started by an unprivileged CI user. The disposable test
-  # directory therefore needs traversal/write permissions for that process.
-  chmod 0777 "$tmp"
+  local tmp port pid="" privileged_tmp=false
+  # Ubuntu confines named with AppArmor and rejects arbitrary /tmp configs.
+  # Prefer /var/cache/bind, which the distribution profile permits.
+  if [[ -d /var/cache/bind ]] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    tmp="$(sudo mktemp -d /var/cache/bind/chrislab-dns-e2e.XXXXXX)"
+    sudo chmod 0777 "$tmp"
+    privileged_tmp=true
+  else
+    tmp="$(mktemp -d -t chrislab-dns-e2e.XXXXXX)"
+    chmod 0777 "$tmp"
+  fi
   port="$((15353 + ($$ % 1000)))"
   cleanup_isolated() {
     local rc=$?
@@ -52,7 +57,11 @@ run_isolated_bind_test() {
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     fi
-    rm -rf "$tmp"
+    if [[ "$privileged_tmp" == true ]]; then
+      sudo rm -rf "$tmp"
+    else
+      rm -rf "$tmp"
+    fi
     return "$rc"
   }
   trap cleanup_isolated RETURN
