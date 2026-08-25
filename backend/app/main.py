@@ -6,21 +6,23 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .api.router import api_router
 from .config import get_settings
-from .database import init_db
+from .database import SessionLocal, init_db
 from .errors import AppError
+from .models import User
 from .security import get_client_ip, rate_limiter
 from .web import router as web_router
+from .web_platform import router as web_platform_router
 
 settings = get_settings()
 logging.basicConfig(
@@ -74,6 +76,23 @@ def _security_headers(response):
 
 
 @app.middleware("http")
+async def enforce_web_two_factor(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") and not path.startswith("/static/") and path not in {"/login", "/login/totp", "/logout"}:
+        user_id = request.session.get("user_id")
+        if user_id and not request.session.get("totp_verified"):
+            try:
+                with SessionLocal() as db:
+                    user = db.get(User, int(user_id))
+                    if user is not None and user.enabled and user.totp_enabled:
+                        return RedirectResponse("/login/totp", status_code=303)
+            except (TypeError, ValueError):
+                request.session.clear()
+                return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def security_headers_and_rate_limit(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         try:
@@ -124,4 +143,5 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router)
+app.include_router(web_platform_router)
 app.include_router(web_router)
