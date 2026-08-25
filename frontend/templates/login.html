@@ -1,7 +1,8 @@
 {% extends "base.html" %}{% block title %}Logowanie · ChrisLab DNS{% endblock %}{% block anonymous %}
 <div class="min-vh-100 d-flex align-items-center justify-content-center bg-body-tertiary p-3"><div class="card shadow-sm login-card"><div class="card-body p-4">
 <h1 class="h4 mb-1">ChrisLab DNS</h1><p class="text-body-secondary mb-2">Panel zarządzania BIND9</p>
-<p class="small text-body-secondary mb-4">Logowanie kontem Linux przez PAM{% if ldap_enabled %} lub kontem LDAP{% endif %}.</p>
+<p class="small text-body-secondary mb-4">Tryb logowania: {% if auth_mode == 'local' %}<strong>konto lokalne aplikacji</strong>{% elif auth_mode == 'pam' %}<strong>Linux / PAM</strong>{% else %}<strong>LDAP</strong>{% endif %}.</p>
+{% if auth_mode == 'local' %}<div class="alert alert-warning py-2 small">Domyślna instalacja: <code>admin</code> / <code>admin</code>. Zmień dane po pierwszym logowaniu.</div>{% endif %}
 {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 <form method="post" action="/login"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="mb-3"><label class="form-label">Użytkownik</label><input class="form-control" name="username" autocomplete="username" required></div><div class="mb-3"><label class="form-label">Hasło</label><input class="form-control" type="password" name="password" autocomplete="current-password" required></div><button class="btn btn-primary w-100">Zaloguj</button></form>
 </div></div></div>
