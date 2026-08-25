@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install_HomeLAB-dns.sh"
+BASE_INSTALLER = ROOT / "install.sh"
 EXAMPLE_CONFIG = ROOT / "config" / "install_HomeLAB-dns.example.json"
 
 
@@ -64,6 +65,14 @@ def test_homelab_installer_uses_linux_pam_identity() -> None:
     assert 'useradd --create-home --shell /bin/bash "$PANEL_LOGIN"' in content
     assert 'chpasswd' in content
     assert "Linux/PAM" in content
+
+
+def test_application_service_is_enabled_for_os_startup() -> None:
+    content = BASE_INSTALLER.read_text(encoding="utf-8")
+    assert 'systemctl enable --now bind9-web-manager' in content
+    service = (ROOT / "systemd" / "bind9-web-manager.service").read_text(encoding="utf-8")
+    assert "WantedBy=multi-user.target" in service
+    assert "Restart=on-failure" in service
 
 
 def test_panel_api_token_is_optional() -> None:
