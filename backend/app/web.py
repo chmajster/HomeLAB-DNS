@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -9,12 +8,18 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from .config import get_settings
+from .authentication import (
+    authenticate_identity,
+    ensure_authorization_profile,
+    get_ldap_settings,
+    save_ldap_settings,
+    test_ldap_connection,
+)
 from .database import get_db
 from .errors import AppError
 from .models import ApiToken, AppState, AuditLog, Backup, Record, User, Zone
 from .permissions import ROLE_PERMISSIONS
-from .security import ensure_csrf, ensure_csrf_token, get_client_ip, rate_limiter, verify_password
+from .security import ensure_csrf, ensure_csrf_token, get_client_ip, rate_limiter
 from .services.bind import BindService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +53,7 @@ def _context(request: Request, db: Session, **extra):
         "csrf_token": ensure_csrf_token(request),
         "permissions": ROLE_PERMISSIONS.get(user.role, set()) if user else set(),
         "theme": user.theme if user else "system",
+        "auth_type": request.session.get("auth_type") if user else None,
     }
     data.update(extra)
     return data
@@ -57,7 +63,8 @@ def _context(request: Request, db: Session, **extra):
 def login_page(request: Request, db: Session = Depends(get_db)):
     if _current_user(request, db):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html", _context(request, db))
+    ldap = get_ldap_settings(db)
+    return templates.TemplateResponse(request, "login.html", _context(request, db, ldap_enabled=ldap.enabled))
 
 
 @router.post("/login")
@@ -71,16 +78,38 @@ def login(
     ensure_csrf(request, csrf_token)
     ip = get_client_ip(request)
     rate_limiter.check(f"login:{ip}", 5, 300)
-    user = db.scalar(select(User).where(User.username == username.strip()))
-    if user is None or not user.enabled or not verify_password(user.password_hash, password):
+    normalized_username = username.strip()
+    auth_type = authenticate_identity(db, normalized_username, password)
+    if auth_type is None:
         return templates.TemplateResponse(
             request,
             "login.html",
-            _context(request, db, error="Nieprawidłowa nazwa użytkownika lub hasło."),
+            _context(
+                request,
+                db,
+                error="Nieprawidłowa nazwa użytkownika lub hasło.",
+                ldap_enabled=get_ldap_settings(db).enabled,
+            ),
             status_code=401,
         )
+
+    user = ensure_authorization_profile(db, normalized_username, auth_type)
+    if not user.enabled:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            _context(
+                request,
+                db,
+                error="Konto jest wyłączone w ChrisLab DNS.",
+                ldap_enabled=get_ldap_settings(db).enabled,
+            ),
+            status_code=403,
+        )
+
     request.session.clear()
     request.session["user_id"] = user.id
+    request.session["auth_type"] = auth_type
     ensure_csrf_token(request)
     return RedirectResponse("/", status_code=303)
 
@@ -215,8 +244,21 @@ def users_page(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, db: Session = Depends(get_db)):
-    _require_user(request, db)
-    return templates.TemplateResponse(request, "settings.html", _context(request, db))
+    user = _require_user(request, db)
+    ldap = get_ldap_settings(db)
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        _context(
+            request,
+            db,
+            ldap=ldap,
+            ldap_bind_password_set=bool(ldap.bind_password),
+            can_manage_auth="settings.manage" in ROLE_PERMISSIONS.get(user.role, set()),
+            saved=request.query_params.get("saved") == "1",
+            ldap_test=request.query_params.get("ldap_test", ""),
+        ),
+    )
 
 
 @router.post("/settings/theme")
@@ -233,6 +275,59 @@ def update_theme(
     user.theme = theme
     db.commit()
     return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/authentication")
+def update_authentication_settings(
+    request: Request,
+    csrf_token: str = Form(...),
+    ldap_enabled: str | None = Form(None),
+    ldap_url: str = Form(...),
+    ldap_start_tls: str | None = Form(None),
+    ldap_verify_tls: str | None = Form(None),
+    ldap_base_dn: str = Form(...),
+    ldap_bind_dn: str = Form(""),
+    ldap_bind_password: str = Form(""),
+    ldap_clear_bind_password: str | None = Form(None),
+    ldap_user_filter: str = Form(...),
+    ldap_default_role: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = _require_user(request, db)
+    ensure_csrf(request, csrf_token)
+    if "settings.manage" not in ROLE_PERMISSIONS.get(user.role, set()):
+        raise AppError("FORBIDDEN", "Permission required: settings.manage", 403)
+    try:
+        save_ldap_settings(
+            db,
+            enabled=ldap_enabled == "on",
+            url=ldap_url,
+            start_tls=ldap_start_tls == "on",
+            verify_tls=ldap_verify_tls == "on",
+            base_dn=ldap_base_dn,
+            bind_dn=ldap_bind_dn,
+            bind_password=ldap_bind_password or None,
+            clear_bind_password=ldap_clear_bind_password == "on",
+            user_filter=ldap_user_filter,
+            default_role=ldap_default_role,
+        )
+    except ValueError as exc:
+        raise AppError("INVALID_LDAP_SETTINGS", str(exc), 422) from exc
+    return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+@router.post("/settings/authentication/test")
+def test_authentication_settings(
+    request: Request,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = _require_user(request, db)
+    ensure_csrf(request, csrf_token)
+    if "settings.manage" not in ROLE_PERMISSIONS.get(user.role, set()):
+        raise AppError("FORBIDDEN", "Permission required: settings.manage", 403)
+    ok, _message = test_ldap_connection(db)
+    return RedirectResponse(f"/settings?ldap_test={'ok' if ok else 'failed'}", status_code=303)
 
 
 @router.get("/synchronize", response_class=HTMLResponse)
