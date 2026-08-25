@@ -7,10 +7,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on:
-      - self-hosted
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install system test dependencies
@@ -23,3 +20,136 @@ jobs:
         run: python -m pip install -r backend/requirements.txt -r requirements-dev.txt
       - name: Test
         run: ./testing.sh
+      - name: Full installer and Web UI smoke test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          diagnostics() {
+            local rc=$?
+            set +e
+            echo "=== installer log ==="
+            sudo tail -n 120 /var/log/chrislab-dns-install.log 2>/dev/null || true
+            echo "=== service status ==="
+            sudo systemctl --no-pager -l status bind9-web-manager bind9 nginx 2>/dev/null || true
+            echo "=== application journal ==="
+            sudo journalctl -u bind9-web-manager -n 120 --no-pager 2>/dev/null || true
+            echo "=== nginx journal ==="
+            sudo journalctl -u nginx -n 80 --no-pager 2>/dev/null || true
+            echo "=== listeners ==="
+            sudo ss -ltnp 2>/dev/null || true
+            exit "$rc"
+          }
+          trap diagnostics ERR
+
+          wait_for_web() {
+            local url="${1:-http://127.0.0.1/login}"
+            for _ in $(seq 1 50); do
+              if curl -fsS "$url" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 0.2
+            done
+            echo "Web UI did not become ready: $url" >&2
+            return 1
+          }
+
+          sudo ./install.sh --silent --result-json /root/chrislab-result.json
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/root/chrislab-result.json').read_text())
+          assert result['status'] == 'installed'
+          assert result['authentication'] == 'local'
+          assert result['authentication_modes'] == ['local', 'pam', 'ldap']
+          assert result['admin']['username'] == 'admin'
+          PY
+
+          sudo systemctl is-enabled --quiet bind9-web-manager
+          sudo systemctl is-active --quiet bind9-web-manager
+          sudo systemctl is-enabled --quiet nginx
+          sudo systemctl is-active --quiet nginx
+          sudo named-checkconf /etc/bind/named.conf
+          wait_for_web
+
+          login_status() {
+            local username="$1" password="$2" jar="$3" base="${4:-http://127.0.0.1}" page csrf
+            page="$(mktemp)"
+            curl -fsS -c "$jar" "$base/login" -o "$page"
+            csrf="$(python3 - "$page" <<'PY'
+          import re, sys
+          text = open(sys.argv[1], encoding='utf-8').read()
+          match = re.search(r'name="csrf_token" value="([^"]+)"', text)
+          if not match:
+              raise SystemExit('CSRF token not found')
+          print(match.group(1))
+          PY
+          )"
+            curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
+              --data-urlencode "csrf_token=$csrf" \
+              --data-urlencode "username=$username" \
+              --data-urlencode "password=$password" \
+              "$base/login"
+            rm -f "$page"
+          }
+
+          jar=/tmp/chrislab-cookie.txt
+          test "$(login_status admin admin "$jar")" = "303"
+          curl -fsS -b "$jar" http://127.0.0.1/ >/tmp/chrislab-dashboard.html
+          grep -q 'ChrisLab DNS' /tmp/chrislab-dashboard.html
+
+          curl -fsS -b "$jar" http://127.0.0.1/settings -o /tmp/chrislab-settings.html
+          csrf="$(python3 - <<'PY'
+          import re
+          text = open('/tmp/chrislab-settings.html', encoding='utf-8').read()
+          match = re.search(r'name="csrf_token" value="([^"]+)"', text)
+          if not match:
+              raise SystemExit('CSRF token not found')
+          print(match.group(1))
+          PY
+          )"
+          code="$(curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
+            --data-urlencode "csrf_token=$csrf" \
+            --data-urlencode 'current_password=admin' \
+            --data-urlencode 'new_username=chris' \
+            --data-urlencode 'new_password=1' \
+            http://127.0.0.1/settings/local-account)"
+          test "$code" = "303"
+
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar")" = "303"
+
+          sudo ./install.sh --silent --result-json /root/chrislab-result-rerun.json
+          sudo systemctl restart bind9-web-manager
+          sudo systemctl is-active --quiet bind9-web-manager
+          wait_for_web
+
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar")" = "303"
+          rm -f "$jar"
+          test "$(login_status admin admin "$jar")" = "401"
+
+          sudo ./install_HomeLAB-dns.sh --silent \
+            --forward-dns-server 1.1.1.1 \
+            --web-ui-ip 127.0.0.1 \
+            --port 81 \
+            --panel-login chris \
+            --panel-password 1 \
+            --result-json /root/homelab-result.json
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/root/homelab-result.json').read_text())
+          assert result['status'] == 'installed'
+          assert result['authentication'] == 'local'
+          assert result['authentication_modes'] == ['local', 'pam', 'ldap']
+          assert result['url'] == 'http://127.0.0.1:81/'
+          assert result['web_ui_ip'] == '127.0.0.1'
+          assert result['port'] == 81
+          assert result['forward_dns_server'] == '1.1.1.1'
+          assert result['api_token_configured'] is False
+          PY
+          sudo named-checkconf /etc/bind/named.conf
+          wait_for_web http://127.0.0.1:81/login
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar" http://127.0.0.1:81)" = "303"

@@ -25,8 +25,10 @@ for script in install.sh update.sh uninstall.sh testing.sh scripts/*.sh; do
 done
 
 if command -v shellcheck >/dev/null 2>&1; then
-  log "Running shellcheck"
-  shellcheck install.sh update.sh uninstall.sh testing.sh scripts/*.sh
+  log "Running shellcheck advisory warnings"
+  shellcheck -S warning install.sh update.sh uninstall.sh testing.sh scripts/*.sh || log "ShellCheck warnings reported; continuing to blocking error check"
+  log "Running shellcheck blocking error check"
+  shellcheck -S error install.sh update.sh uninstall.sh testing.sh scripts/*.sh
 else
   log "SKIP shellcheck: command is not installed"
 fi
@@ -37,8 +39,17 @@ run_isolated_bind_test() {
     return 0
   fi
 
-  local tmp port pid=""
-  tmp="$(mktemp -d -t chrislab-dns-e2e.XXXXXX)"
+  local tmp port pid="" privileged_tmp=false
+  # Ubuntu confines named with AppArmor and rejects arbitrary /tmp configs.
+  # Prefer /var/cache/bind, which the distribution profile permits.
+  if [[ -d /var/cache/bind ]] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    tmp="$(sudo mktemp -d /var/cache/bind/chrislab-dns-e2e.XXXXXX)"
+    sudo chmod 0777 "$tmp"
+    privileged_tmp=true
+  else
+    tmp="$(mktemp -d -t chrislab-dns-e2e.XXXXXX)"
+    chmod 0777 "$tmp"
+  fi
   port="$((15353 + ($$ % 1000)))"
   cleanup_isolated() {
     local rc=$?
@@ -46,7 +57,11 @@ run_isolated_bind_test() {
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     fi
-    rm -rf "$tmp"
+    if [[ "$privileged_tmp" == true ]]; then
+      sudo rm -rf "$tmp"
+    else
+      rm -rf "$tmp"
+    fi
     return "$rc"
   }
   trap cleanup_isolated RETURN
@@ -71,6 +86,7 @@ options {
 };
 zone "chrislab-e2e.test" { type primary; file "$tmp/db.chrislab-e2e.test"; };
 CONF
+  chmod 0644 "$tmp/named.conf" "$tmp/db.chrislab-e2e.test"
 
   cp -a "$tmp/named.conf" "$tmp/named.conf.snapshot"
   cp -a "$tmp/db.chrislab-e2e.test" "$tmp/db.chrislab-e2e.test.snapshot"

@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install_HomeLAB-dns.sh"
+BASE_INSTALLER = ROOT / "install.sh"
 EXAMPLE_CONFIG = ROOT / "config" / "install_HomeLAB-dns.example.json"
 
 
@@ -23,6 +24,8 @@ def test_homelab_installer_uses_expected_default_config() -> None:
     content = INSTALLER.read_text(encoding="utf-8")
     assert 'DEFAULT_CONFIG="/root/configs/install_HomeLAB-dns.json"' in content
     assert 'PUBLIC_PORT="81"' in content
+    assert 'PANEL_LOGIN="admin"' in content
+    assert 'PANEL_PASSWORD="admin"' in content
     assert 'forward_dns_server' in content
     assert 'panel_login' in content
     assert 'panel_password' in content
@@ -33,7 +36,10 @@ def test_homelab_installer_uses_expected_default_config() -> None:
 def test_homelab_installer_falls_back_to_normal_installer() -> None:
     content = INSTALLER.read_text(encoding="utf-8")
     assert 'BASE_INSTALLER="$SOURCE_DIR/install.sh"' in content
-    assert 'if [[ ! -f "$CONFIG_FILE" ]]; then' in content
+    assert 'run_base_without_provisioning()' in content
+    assert 'if [[ -f "$CONFIG_FILE" ]]; then' in content
+    assert 'elif [[ "$CONFIG_EXPLICIT" == true ]]; then' in content
+    assert 'elif [[ "$CLI_PROVISIONING" != true ]]; then' in content
     assert 'exec "$BASE_INSTALLER" "${args[@]}"' in content
     assert "create_interactive_config" not in content
 
@@ -58,18 +64,29 @@ def test_homelab_installer_protects_secret_config() -> None:
     assert "path.chmod(0o600)" in content
 
 
-def test_homelab_installer_uses_linux_pam_identity() -> None:
+def test_homelab_installer_uses_local_application_identity() -> None:
     content = INSTALLER.read_text(encoding="utf-8")
-    assert 'getent passwd "$PANEL_LOGIN"' in content
-    assert 'useradd --create-home --shell /bin/bash "$PANEL_LOGIN"' in content
-    assert 'chpasswd' in content
-    assert "Linux/PAM" in content
+    assert '"admin": {"username": os.environ["PANEL_LOGIN"], "password_file": os.environ["PASSWORD_FILE"]}' in content
+    assert 'result["authentication"] = "local"' in content
+    assert 'result["authentication_modes"] = ["local", "pam", "ldap"]' in content
+    assert "local application account" in content
+    assert 'getent passwd "$PANEL_LOGIN"' not in content
+    assert 'useradd --create-home --shell /bin/bash "$PANEL_LOGIN"' not in content
+    assert 'printf \'%s:%s\\n\' "$PANEL_LOGIN" "$PANEL_PASSWORD" | chpasswd' not in content
+
+
+def test_application_service_is_enabled_for_os_startup() -> None:
+    content = BASE_INSTALLER.read_text(encoding="utf-8")
+    assert 'systemctl enable --now bind9-web-manager' in content
+    service = (ROOT / "systemd" / "bind9-web-manager.service").read_text(encoding="utf-8")
+    assert "WantedBy=multi-user.target" in service
+    assert "Restart=on-failure" in service
 
 
 def test_panel_api_token_is_optional() -> None:
     content = INSTALLER.read_text(encoding="utf-8")
-    required_block = content.split('required = {', 1)[1].split('}', 1)[0]
-    assert '"panel_api_token"' not in required_block
+    assert 'token = os.environ["PANEL_API_TOKEN"]' in content
+    assert 'if token and (not token.startswith("cldns_") or len(token) < 32):' in content
     assert 'if [[ -n "$PANEL_API_TOKEN" ]]; then' in content
     assert 'api_token_configured=false' in content
 

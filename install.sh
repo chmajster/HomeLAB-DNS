@@ -29,13 +29,12 @@ AUTO_BACKUP="true"
 TRUSTED_HOSTS="*"
 LOG_LEVEL="INFO"
 ADMIN_USERNAME="admin"
-ADMIN_PASSWORD=""
+ADMIN_PASSWORD="admin"
 ADMIN_PASSWORD_FILE=""
 SYNC_EXISTING="true"
 REMOVE_DEFAULT_NGINX_SITE="true"
 ADMIN_SECRET_TEMP=""
-ONE_TIME_PAM_PASSWORD=""
-ADMIN_STATUS="existing_pam_account"
+ADMIN_STATUS="local_account_existing"
 
 usage() {
   cat <<'EOF'
@@ -48,9 +47,9 @@ Options:
   -h, --help                   Show this help.
 
 Authentication:
-  Web UI login uses the local Linux account database through PAM. The installer
-  creates the configured administrator Linux account when it does not exist.
-  LDAP can be enabled later from Settings -> Authentication.
+  Web UI login uses the local ChrisLab DNS account database by default.
+  Default first-install credentials are admin / admin. Change them after login.
+  Linux/PAM or LDAP can be selected later in Settings -> Authentication.
 
 Examples:
   sudo ./install.sh
@@ -78,6 +77,7 @@ run_logged() {
 
 cleanup() {
   [[ -n "$ADMIN_SECRET_TEMP" ]] && rm -f "$ADMIN_SECRET_TEMP"
+  return 0
 }
 trap cleanup EXIT
 
@@ -229,8 +229,10 @@ fi
 install -d -o "$APP_USER" -g "$APP_GROUP" -m 0750 "$DATA_DIR" "$BACKUP_DIR" "$STAGING_DIR"
 install -d -o root -g root -m 0700 "$HELPER_STATE_DIR"
 if [[ ! -f "$BACKUP_SIGNING_KEY" ]]; then
-  umask 077
-  python3 -c 'import secrets; print(secrets.token_hex(32))' > "$BACKUP_SIGNING_KEY"
+  (
+    umask 077
+    python3 -c 'import secrets; print(secrets.token_hex(32))' > "$BACKUP_SIGNING_KEY"
+  )
 fi
 chown root:root "$BACKUP_SIGNING_KEY"
 chmod 0600 "$BACKUP_SIGNING_KEY"
@@ -293,6 +295,15 @@ if [[ "$SILENT" == true ]]; then
 else
   "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check --upgrade pip
   "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -r "$APP_DIR/backend/requirements.txt"
+fi
+chmod -R a+rX "$APP_DIR/.venv"
+if ! runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c 'import argon2, greenlet, pydantic_core, cryptography, fastapi, sqlalchemy' >/dev/null 2>&1; then
+  {
+    echo "Virtualenv dependency import diagnostics:"
+    namei -l "$APP_DIR/.venv/bin/python" 2>&1 || true
+    find "$APP_DIR/.venv" -type f ! -perm -004 -print 2>/dev/null | head -n 50 || true
+  } >>"$INSTALL_LOG"
+  fail "Python virtualenv dependencies are not readable/executable by $APP_USER. Diagnostics: $INSTALL_LOG"
 fi
 chown -R root:root "$APP_DIR"
 
@@ -359,7 +370,8 @@ fi
 SERVICE_TMP="$(mktemp)"
 NGINX_TMP="$(mktemp)"
 trap 'rm -f "$SERVICE_TMP" "$NGINX_TMP"; cleanup' EXIT
-APP_DIR="$APP_DIR" DATA_DIR="$DATA_DIR" APP_HOST="$APP_HOST" APP_PORT="$APP_PORT" python3 - "$APP_DIR/systemd/bind9-web-manager.service" "$SERVICE_TMP" "$APP_DIR/nginx/bind9-web-manager.conf" "$NGINX_TMP" <<'PY'
+export APP_DIR DATA_DIR APP_HOST APP_PORT
+python3 - "$APP_DIR/systemd/bind9-web-manager.service" "$SERVICE_TMP" "$APP_DIR/nginx/bind9-web-manager.conf" "$NGINX_TMP" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -375,15 +387,16 @@ PY
 install -o root -g root -m 0644 "$SERVICE_TMP" /etc/systemd/system/bind9-web-manager.service
 install -o root -g root -m 0644 "$NGINX_TMP" /etc/nginx/sites-available/bind9-web-manager
 ln -sfn /etc/nginx/sites-available/bind9-web-manager /etc/nginx/sites-enabled/bind9-web-manager
-[[ "$REMOVE_DEFAULT_NGINX_SITE" == true ]] && rm -f /etc/nginx/sites-enabled/default
+if [[ "$REMOVE_DEFAULT_NGINX_SITE" == true ]]; then
+  rm -f /etc/nginx/sites-enabled/default
+fi
 run_logged nginx -t
 
 (cd "$APP_DIR" && runuser -u "$APP_USER" -- env ENV_FILE="$ENV_FILE" "$APP_DIR/.venv/bin/python" -m backend.app.cli migrate) >/dev/null
 
-# PAM administrator bootstrap. Existing Linux accounts keep their password unless
-# an explicit admin password/password_file was supplied. If the account does not
-# exist and no password was supplied, a one-time Linux/PAM password is generated.
-admin_pam_password=""
+# Bootstrap the local application administrator. Re-running the installer never
+# resets an existing application account password.
+local_admin_password="$ADMIN_PASSWORD"
 if [[ -n "$ADMIN_PASSWORD_FILE" ]]; then
   [[ "$ADMIN_PASSWORD_FILE" == /* ]] || fail "admin.password_file must be absolute"
   [[ -f "$ADMIN_PASSWORD_FILE" && ! -L "$ADMIN_PASSWORD_FILE" ]] || fail "admin.password_file must be a regular non-symlink file"
@@ -392,39 +405,22 @@ if [[ -n "$ADMIN_PASSWORD_FILE" ]]; then
   admin_password_mode="$(stat -c %a "$ADMIN_PASSWORD_FILE")"
   (( (8#$admin_password_mode & 8#022) == 0 )) || fail "admin.password_file must not be group/world writable"
   [[ "$(stat -c %s "$ADMIN_PASSWORD_FILE")" -le 4096 ]] || fail "admin.password_file is too large"
-  admin_pam_password="$(<"$ADMIN_PASSWORD_FILE")"
-elif [[ -n "$ADMIN_PASSWORD" ]]; then
-  admin_pam_password="$ADMIN_PASSWORD"
+  local_admin_password="$(<"$ADMIN_PASSWORD_FILE")"
 fi
+[[ -n "$local_admin_password" ]] || fail "Local administrator password must not be empty"
 
-if ! getent passwd "$ADMIN_USERNAME" >/dev/null; then
-  useradd --create-home --shell /bin/bash "$ADMIN_USERNAME" || fail "Unable to create Linux/PAM administrator account: $ADMIN_USERNAME"
-  if [[ -z "$admin_pam_password" ]]; then
-    admin_pam_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-    ONE_TIME_PAM_PASSWORD="$admin_pam_password"
-    ADMIN_STATUS="pam_account_created_generated_password"
-  else
-    ADMIN_STATUS="pam_account_created_configured_password"
-  fi
-elif [[ -n "$admin_pam_password" ]]; then
-  ADMIN_STATUS="pam_password_updated"
-fi
-
-if [[ -n "$admin_pam_password" ]]; then
-  printf '%s:%s\n' "$ADMIN_USERNAME" "$admin_pam_password" | chpasswd || fail "Unable to set Linux/PAM password for $ADMIN_USERNAME"
-fi
-
-admin_args=(create-admin --username "$ADMIN_USERNAME")
-if [[ -n "$admin_pam_password" ]]; then
-  ADMIN_SECRET_TEMP="$(mktemp /run/chrislab-dns-admin-password.XXXXXX)"
-  printf '%s\n' "$admin_pam_password" > "$ADMIN_SECRET_TEMP"
-  chown "$APP_USER:$APP_GROUP" "$ADMIN_SECRET_TEMP"
-  chmod 0400 "$ADMIN_SECRET_TEMP"
-  admin_args+=(--password-file "$ADMIN_SECRET_TEMP")
-fi
-(cd "$APP_DIR" && runuser -u "$APP_USER" -- env ENV_FILE="$ENV_FILE" "$APP_DIR/.venv/bin/python" -m backend.app.cli "${admin_args[@]}") >/dev/null
+ADMIN_SECRET_TEMP="$(mktemp /run/chrislab-dns-admin-password.XXXXXX)"
+printf '%s\n' "$local_admin_password" > "$ADMIN_SECRET_TEMP"
+chown "$APP_USER:$APP_GROUP" "$ADMIN_SECRET_TEMP"
+chmod 0400 "$ADMIN_SECRET_TEMP"
+admin_output="$(cd "$APP_DIR" && runuser -u "$APP_USER" -- env ENV_FILE="$ENV_FILE" "$APP_DIR/.venv/bin/python" -m backend.app.cli create-admin --username "$ADMIN_USERNAME" --password-file "$ADMIN_SECRET_TEMP")"
 rm -f "$ADMIN_SECRET_TEMP"
 ADMIN_SECRET_TEMP=""
+case "$admin_output" in
+  ADMIN_CREATED) ADMIN_STATUS="local_account_created" ;;
+  ADMIN_EXISTS) ADMIN_STATUS="local_account_existing" ;;
+  *) fail "Unexpected local administrator bootstrap result: $admin_output" ;;
+esac
 
 run_logged systemctl daemon-reload
 BIND_SERVICE="$(systemctl show -p Id --value bind9.service 2>/dev/null || true)"
@@ -456,7 +452,7 @@ if [[ -n "$RESULT_JSON" ]]; then
   result_parent_mode="$(stat -c %a "$result_parent")"
   (( (8#$result_parent_mode & 8#022) == 0 )) || fail "--result-json parent must not be group/world writable"
   [[ ! -L "$RESULT_JSON" ]] || fail "--result-json target must not be a symbolic link"
-  RESULT_URL="$install_url" RESULT_ADMIN_USERNAME="$ADMIN_USERNAME" RESULT_ADMIN_STATUS="$ADMIN_STATUS" RESULT_ADMIN_PASSWORD="$ONE_TIME_PAM_PASSWORD" RESULT_SYNC="$sync_output" python3 - "$RESULT_JSON" <<'PY'
+  RESULT_URL="$install_url" RESULT_ADMIN_USERNAME="$ADMIN_USERNAME" RESULT_ADMIN_STATUS="$ADMIN_STATUS" RESULT_SYNC="$sync_output" python3 - "$RESULT_JSON" <<'PY'
 import json
 import os
 import sys
@@ -464,12 +460,11 @@ from pathlib import Path
 result = {
     "status": "installed",
     "url": os.environ["RESULT_URL"],
-    "authentication": "pam",
-    "ldap_configurable": True,
+    "authentication": "local",
+    "authentication_modes": ["local", "pam", "ldap"],
     "admin": {
         "username": os.environ["RESULT_ADMIN_USERNAME"],
         "status": os.environ["RESULT_ADMIN_STATUS"],
-        "one_time_password": os.environ["RESULT_ADMIN_PASSWORD"] or None,
     },
     "synchronization": os.environ["RESULT_SYNC"],
 }
@@ -484,15 +479,16 @@ if [[ "$SILENT" == true && -n "$RESULT_JSON" ]]; then
 fi
 
 echo "ChrisLab-DNS installed: $install_url"
-echo "Authentication: Linux/PAM (LDAP can be enabled in Settings)"
-echo "Administrator PAM account: $ADMIN_USERNAME"
-if [[ -n "$ONE_TIME_PAM_PASSWORD" ]]; then
-  echo "ONE_TIME_ADMIN_PASSWORD=$ONE_TIME_PAM_PASSWORD"
-  echo "The Linux/PAM administrator password above is shown only once."
-elif [[ "$ADMIN_STATUS" == "pam_account_created_configured_password" || "$ADMIN_STATUS" == "pam_password_updated" ]]; then
-  echo "Linux/PAM administrator password configured from installer input."
+echo "Authentication: local application account (PAM or LDAP can be selected in Settings)"
+echo "Administrator local account: $ADMIN_USERNAME"
+if [[ "$ADMIN_STATUS" == "local_account_created" && "$ADMIN_USERNAME" == "admin" && "$local_admin_password" == "admin" ]]; then
+  echo "Default login: admin"
+  echo "Default password: admin"
+  echo "Change the default credentials after the first login."
+elif [[ "$ADMIN_STATUS" == "local_account_created" ]]; then
+  echo "Local administrator credentials configured from installer input."
 else
-  echo "Existing Linux/PAM administrator credentials were preserved."
+  echo "Existing local administrator credentials were preserved."
 fi
 if [[ "$SYNC_EXISTING" == true ]]; then
   echo "$sync_output"

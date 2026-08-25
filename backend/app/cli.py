@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from .database import SessionLocal, init_db
 from .errors import AppError
-from .models import Backup, User
+from .models import AppState, Backup, User
 from .security import hash_password
 from .services.backup import BackupService
 from .services.sync import SyncService
@@ -35,11 +35,17 @@ def read_password_file(path_text: str) -> str:
     return password
 
 
-def create_admin(username: str, password: str | None) -> str | None:
+def create_admin(username: str, password: str | None, *, only_if_admin_missing: bool = True) -> str | None:
     init_db()
     generated = password is None
     password = password or strong_password()
     with SessionLocal() as db:
+        if only_if_admin_missing:
+            admin_exists = db.scalar(
+                select(User.id).where(User.role == "administrator", User.enabled.is_(True)).limit(1)
+            )
+            if admin_exists is not None:
+                return None
         if db.scalar(select(User.id).where(User.username == username)) is not None:
             return None
         db.add(User(username=username, password_hash=hash_password(password), role="administrator", enabled=True))
@@ -49,6 +55,10 @@ def create_admin(username: str, password: str | None) -> str | None:
 
 def migrate() -> None:
     init_db()
+    with SessionLocal() as db:
+        if db.get(AppState, "auth.mode") is None:
+            db.add(AppState(key="auth.mode", value="local"))
+        db.commit()
 
 
 def sync_existing() -> list[str]:
@@ -89,6 +99,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("create-admin")
     admin.add_argument("--username", default="admin")
+    admin.add_argument("--allow-additional-admin", action="store_true")
     password_group = admin.add_mutually_exclusive_group()
     password_group.add_argument("--password")
     password_group.add_argument("--password-file")
@@ -101,7 +112,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "create-admin":
         password = read_password_file(args.password_file) if args.password_file else args.password
-        result = create_admin(args.username, password)
+        result = create_admin(args.username, password, only_if_admin_missing=not args.allow_additional_admin)
         if result is None:
             print("ADMIN_EXISTS")
         elif result:
