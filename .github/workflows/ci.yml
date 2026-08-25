@@ -73,9 +73,9 @@ jobs:
           wait_for_web
 
           login_status() {
-            local username="$1" password="$2" jar="$3" page csrf
+            local username="$1" password="$2" jar="$3" base="${4:-http://127.0.0.1}" page csrf
             page="$(mktemp)"
-            curl -fsS -c "$jar" http://127.0.0.1/login -o "$page"
+            curl -fsS -c "$jar" "$base/login" -o "$page"
             csrf="$(python3 - "$page" <<'PY'
           import re, sys
           text = open(sys.argv[1], encoding='utf-8').read()
@@ -89,7 +89,7 @@ jobs:
               --data-urlencode "csrf_token=$csrf" \
               --data-urlencode "username=$username" \
               --data-urlencode "password=$password" \
-              http://127.0.0.1/login
+              "$base/login"
             rm -f "$page"
           }
 
@@ -128,3 +128,28 @@ jobs:
           test "$(login_status chris 1 "$jar")" = "303"
           rm -f "$jar"
           test "$(login_status admin admin "$jar")" = "401"
+
+          sudo ./install_HomeLAB-dns.sh --silent \
+            --forward-dns-server 1.1.1.1 \
+            --web-ui-ip 127.0.0.1 \
+            --port 81 \
+            --panel-login chris \
+            --panel-password 1 \
+            --result-json /root/homelab-result.json
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/root/homelab-result.json').read_text())
+          assert result['status'] == 'installed'
+          assert result['authentication'] == 'local'
+          assert result['authentication_modes'] == ['local', 'pam', 'ldap']
+          assert result['url'] == 'http://127.0.0.1:81/'
+          assert result['web_ui_ip'] == '127.0.0.1'
+          assert result['port'] == 81
+          assert result['forward_dns_server'] == '1.1.1.1'
+          assert result['api_token_configured'] is False
+          PY
+          sudo named-checkconf /etc/bind/named.conf
+          wait_for_web http://127.0.0.1:81/login
+          rm -f "$jar"
+          test "$(login_status chris 1 "$jar" http://127.0.0.1:81)" = "303"
