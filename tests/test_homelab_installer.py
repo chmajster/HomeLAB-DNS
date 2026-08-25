@@ -85,10 +85,10 @@ def test_homelab_example_config_matches_required_schema() -> None:
     data = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
     assert set(data) == {
         "forward_dns_server",
+        "web_ui_ip",
         "panel_login",
         "panel_password",
-        "panel_api_token",
         "port",
     }
     assert data["port"] == 81
-    assert data["panel_api_token"].startswith("cldns_")
+    assert "panel_api_token" not in data
