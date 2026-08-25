@@ -50,8 +50,6 @@ def create_admin(username: str, password: str | None) -> str | None:
 def migrate() -> None:
     init_db()
     with SessionLocal() as db:
-        if db.scalar(select(User.id).limit(1)) is None:
-            db.add(User(username="admin", password_hash=hash_password("admin"), role="administrator", enabled=True))
         if db.get(AppState, "auth.mode") is None:
             db.add(AppState(key="auth.mode", value="local"))
         db.commit()
