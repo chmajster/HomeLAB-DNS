@@ -101,20 +101,26 @@ class DnsPlatformService:
         self.db.refresh(row)
         return row, raw_secret
 
-    def rotate_tsig_key(self, row: TsigKey) -> str:
+    def rotate_tsig_key(self, row: TsigKey, *, commit: bool = True) -> str:
         raw_secret = generate_tsig_secret()
         row.secret_encrypted = encrypt_secret(raw_secret)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return raw_secret
 
-    def delete_tsig_key(self, row: TsigKey) -> None:
+    def delete_tsig_key(self, row: TsigKey, *, commit: bool = True) -> None:
         zone = self.db.scalar(select(Zone.name).where(Zone.tsig_key_name == row.name).limit(1))
         server = self.db.scalar(select(DnsServer.name).where(DnsServer.tsig_key_name == row.name).limit(1))
         if zone or server:
             details = f"used by zone {zone}" if zone else f"used by DNS server {server}"
             raise AppError("TSIG_KEY_IN_USE", "TSIG key is still in use", 409, details)
         self.db.delete(row)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
 
     @staticmethod
     def plaintext_tsig_secret(row: TsigKey) -> str:
