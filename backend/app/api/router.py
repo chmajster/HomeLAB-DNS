@@ -12,6 +12,7 @@ from ..security import Principal
 from ..services.bind import BindService
 from .admin import audit_router, backups_router, tokens_router, users_router
 from .bindops import router as bind_router
+from .dhcp import router as dhcp_router
 from .dnssec import router as dnssec_router
 from .platform import router as platform_router
 from .tools import router as tools_router
@@ -100,6 +101,7 @@ api_router.include_router(zones_router)
 api_router.include_router(dnssec_router)
 api_router.include_router(bind_router)
 api_router.include_router(platform_router)
+api_router.include_router(dhcp_router)
 api_router.include_router(backups_router)
 api_router.include_router(audit_router)
 api_router.include_router(tokens_router)
