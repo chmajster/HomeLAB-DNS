@@ -20,10 +20,11 @@ The `/dhcp` page provides:
 - recent memfile leases;
 - Kea journal logs;
 - import of the active `/etc/kea/kea-dhcp4.conf` or `/etc/kea/kea-dhcp6.conf`;
+- timestamped configuration backup listing and restore;
 - full advanced Kea JSON editing;
 - explicit Validate and Apply operations.
 
-The REST API is available under `/api/v1/dhcp` and uses the `dhcp.read` and `dhcp.manage` permissions.
+The REST API is available under `/api/v1/dhcp` and uses the `dhcp.read` and `dhcp.manage` permissions. Backup listing is available at `/api/v1/dhcp/{family}/backups`; restore is exposed as an authenticated write operation and is covered by CSRF protection for session-authenticated requests.
 
 ## Safe apply workflow
 
@@ -40,11 +41,15 @@ Apply performs:
 7. restart only when the service was already running;
 8. automatic rollback if replacement, validation or restart fails.
 
+Restore performs the same safety checks on the selected timestamped backup. Before overwriting the active Kea file it creates another safety backup of the current configuration. When the service was already running it is restarted after restore; a failed restore rolls back to the safety copy. After a successful Web UI/API restore, the application draft is synchronized from the restored active configuration.
+
+Ubuntu's Kea AppArmor profile is left intact. Staged Web UI files are validated by the restricted root helper through a temporary root-owned candidate in `/etc/kea`, so the application does not need broader filesystem or AppArmor privileges.
+
 `hooks-libraries` is intentionally blocked in Web UI/API supplied JSON. Allowing an administrative Web session to select an arbitrary shared object loaded by a privileged service would create an unnecessary code-execution boundary violation.
 
 ## Rogue DHCP protection
 
-Installing the DHCP module must not silently introduce a competing DHCP server. `install_dhcp.sh` checks whether each Kea package was already installed before the module installation. Newly added Kea DHCPv4/DHCPv6 services are disabled and stopped after package installation. Existing Kea installations preserve their prior service state.
+Installing the DHCP module must not silently leave a competing DHCP server enabled. `install_dhcp.sh` checks whether each Kea package was already installed before the module installation. Newly added Kea DHCPv4/DHCPv6 services are disabled and stopped after package installation. Existing Kea installations preserve their prior service state.
 
 Use the Web UI in this order for a new server:
 
