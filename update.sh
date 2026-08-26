@@ -35,6 +35,11 @@ fi
 if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
   rsync -a --delete --exclude '.git/' --exclude '.env' --exclude '.venv/' --exclude 'venv/' "$SOURCE_DIR/" "$APP_DIR/"
 fi
+
+# Install/upgrade Kea and the restricted DHCP helper. Existing Kea service state
+# is preserved; newly installed DHCP services are left disabled/stopped.
+bash "$APP_DIR/install_dhcp.sh" --no-restart
+
 "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -r "$APP_DIR/backend/requirements.txt"
 install -o root -g root -m 0755 "$APP_DIR/scripts/privileged_helper.py" /usr/local/libexec/bind9-web-manager-helper
 install -o root -g root -m 0644 "$APP_DIR/config/pam-chrislab-dns" /etc/pam.d/chrislab-dns
@@ -50,4 +55,4 @@ systemctl reload nginx
 systemctl is-active --quiet bind9-web-manager
 systemctl is-active --quiet bind9
 
-echo "Update completed. BIND9 was validated but not restarted."
+echo "Update completed. BIND9 was validated but not restarted. Kea DHCP module was installed/upgraded without enabling a new DHCP service automatically."
