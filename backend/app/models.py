@@ -70,6 +70,7 @@ class Zone(Base):
     allow_transfer: Mapped[list[str]] = mapped_column(JSON, default=list)
     also_notify: Mapped[list[str]] = mapped_column(JSON, default=list)
     tsig_key_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    dnssec_policy: Mapped[str] = mapped_column(String(32), default="none")
     last_modified: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     records: Mapped[list[Record]] = relationship(back_populates="zone", cascade="all, delete-orphan", order_by="Record.id")
 
