@@ -1,0 +1,140 @@
+/* ChrisLab DNS — UI polish and language controls */
+.language-switcher {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: 0 .55rem 0 .75rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 12px;
+  background: var(--bs-body-bg);
+  color: var(--bs-secondary-color);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+}
+.language-switcher .bi { font-size: .95rem; }
+.language-select {
+  min-width: 52px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--bs-body-color);
+  font-size: .78rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.language-select:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; border-radius: 6px; }
+.language-floating {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1080;
+}
+.language-floating .language-switcher {
+  background: color-mix(in srgb, var(--bs-body-bg) 92%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .10);
+}
+
+.app-topbar { gap: .75rem; }
+.topbar-search { min-width: 0; }
+.main-content > :first-child:not(#alert-host) { animation: ui-enter .18s ease-out both; }
+@keyframes ui-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.card { overflow: hidden; }
+.card > .table-responsive:first-child:last-child { border-radius: inherit; }
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--ui-surface) 96%, var(--bs-tertiary-bg));
+  backdrop-filter: blur(10px);
+}
+.table tbody tr:last-child > * { border-bottom: 0; }
+.table td { vertical-align: middle; }
+.table a:not(.btn) { font-weight: 650; text-decoration: none; }
+.table a:not(.btn):hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.form-control, .form-select {
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+.form-control::placeholder { color: color-mix(in srgb, var(--bs-secondary-color) 74%, transparent); }
+.form-text { line-height: 1.45; }
+textarea.form-control { min-height: 110px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+}
+.btn-sm { border-radius: 9px; }
+.btn-outline-secondary:hover { transform: translateY(-1px); }
+.btn-outline-danger:hover, .btn-outline-warning:hover { transform: translateY(-1px); }
+
+.alert {
+  border-width: 1px;
+  box-shadow: 0 8px 24px rgba(15,23,42,.04);
+}
+.modal-header, .modal-footer { border-color: var(--ui-border); }
+.modal-header { padding: 1.1rem 1.25rem; }
+.modal-body { padding: 1.25rem; }
+.modal-footer { padding: .9rem 1.25rem; }
+
+.nav-tabs .nav-link {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ui-page-header { align-items: center; }
+.ui-actions .btn { min-height: 42px; }
+.ui-toolbar { backdrop-filter: blur(12px); }
+.ui-toolbar:focus-within { border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border)); }
+
+.result-box, .diff-box {
+  font-size: .84rem;
+  line-height: 1.6;
+}
+
+code {
+  padding: .16em .38em;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bs-tertiary-bg) 86%, var(--ui-accent) 4%);
+}
+
+@media (max-width: 1199.98px) {
+  .topbar-status { display: none !important; }
+}
+
+@media (max-width: 767.98px) {
+  .app-topbar { min-height: 66px; padding-inline: 12px; }
+  .topbar-search { flex: 1 1 auto; min-width: 0; }
+  .topbar-search .search-hint { display: none !important; }
+  .language-switcher { min-height: 40px; padding-inline: .55rem; }
+  .language-switcher > .bi { display: none; }
+  .language-select { min-width: 42px; }
+  .main-content { padding: 18px 14px 28px; }
+  .ui-page-header { align-items: stretch; flex-direction: column; }
+  .ui-actions { width: 100%; }
+  .ui-actions .btn { flex: 1 1 auto; }
+  .ui-toolbar { align-items: stretch; flex-direction: column; }
+  .ui-toolbar .input-group { flex-basis: auto; width: 100%; }
+  .table > :not(caption) > * > * { padding: .75rem .65rem; }
+}
+
+@media (max-width: 575.98px) {
+  .topbar-search input { font-size: .82rem; }
+  .language-floating { top: 12px; right: 12px; }
+  .language-floating .language-switcher { min-height: 38px; }
+  .card { border-radius: 18px; }
+  .card-body { padding: 1rem; }
+  .btn-icon { width: 40px; height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
