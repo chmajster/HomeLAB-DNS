@@ -41,6 +41,7 @@ class Settings:
     backup_dir: Path
     staging_dir: Path
     bind_helper: tuple[str, ...]
+    dhcp_helper: tuple[str, ...]
     session_secure: bool
     session_samesite: str
     session_max_age: int
@@ -62,6 +63,7 @@ def get_settings() -> Settings:
     if not secret:
         secret = "test-only-secret-key-not-for-production"
     helper_raw = os.getenv("BIND_HELPER", "/usr/bin/sudo /usr/local/libexec/bind9-web-manager-helper")
+    dhcp_helper_raw = os.getenv("DHCP_HELPER", "/usr/bin/sudo /usr/local/libexec/chrislab-dhcp-helper")
     return Settings(
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=int(os.getenv("APP_PORT", "8080")),
@@ -74,6 +76,7 @@ def get_settings() -> Settings:
         backup_dir=Path(os.getenv("BACKUP_DIR", str(data_dir / "backups"))),
         staging_dir=Path(os.getenv("STAGING_DIR", str(data_dir / "staging"))),
         bind_helper=tuple(shlex.split(helper_raw)),
+        dhcp_helper=tuple(shlex.split(dhcp_helper_raw)),
         session_secure=_bool("SESSION_SECURE", True),
         session_samesite=os.getenv("SESSION_SAMESITE", "lax"),
         session_max_age=int(os.getenv("SESSION_MAX_AGE", "28800")),
