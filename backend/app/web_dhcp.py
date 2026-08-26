@@ -13,6 +13,7 @@ from .dhcp_schemas import DhcpGlobalUpdate, DhcpOptionCreate, DhcpPoolCreate, Dh
 from .errors import AppError
 from .security import ensure_csrf
 from .services.dhcp import DhcpService
+from .services.dhcp_runtime import DhcpRuntimeOps
 from .web_platform import _context, _permissions, _user
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -57,16 +58,26 @@ def _safe_runtime(service: DhcpService, family: int) -> tuple[dict, list[dict], 
     return status, leases, logs, error
 
 
+def _safe_backups(runtime: DhcpRuntimeOps, family: int) -> tuple[list[dict], str | None]:
+    try:
+        return runtime.backups(family), None
+    except Exception as exc:
+        return [], str(exc)
+
+
 @router.get("/dhcp", response_class=HTMLResponse)
 def dhcp_page(request: Request, db: Session = Depends(get_db)):
     user = _user(request, db)
     if "dhcp.read" not in _permissions(user):
         raise AppError("FORBIDDEN", "Permission required: dhcp.read", 403)
     service = DhcpService(db)
+    runtime = DhcpRuntimeOps(service)
     config4 = service.load_draft(4)
     config6 = service.load_draft(6)
     status4, leases4, logs4, error4 = _safe_runtime(service, 4)
     status6, leases6, logs6, error6 = _safe_runtime(service, 6)
+    backups4, backup_error4 = _safe_backups(runtime, 4)
+    backups6, backup_error6 = _safe_backups(runtime, 6)
     return templates.TemplateResponse(
         request,
         "dhcp.html",
@@ -85,7 +96,11 @@ def dhcp_page(request: Request, db: Session = Depends(get_db)):
             logs6=logs6,
             error4=error4,
             error6=error6,
-            interfaces=service.interfaces(),
+            backups4=backups4,
+            backups6=backups6,
+            backup_error4=backup_error4,
+            backup_error6=backup_error6,
+            interfaces=runtime.interfaces(),
             can_manage="dhcp.manage" in _permissions(user),
             message=request.query_params.get("message"),
         ),
@@ -316,6 +331,22 @@ def import_dhcp(family: int, request: Request, csrf_token: str = Form(...), db: 
     ensure_csrf(request, csrf_token)
     DhcpService(db).import_active(_family(family))
     return RedirectResponse(f"/dhcp?message=DHCPv{family}+active+configuration+imported", status_code=303)
+
+
+@router.post("/dhcp/{family}/restore")
+def restore_dhcp(
+    family: int,
+    request: Request,
+    backup_name: str = Form(...),
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _require_manage(request, db)
+    ensure_csrf(request, csrf_token)
+    service = DhcpService(db)
+    DhcpRuntimeOps(service).restore(_family(family), backup_name)
+    service.import_active(family)
+    return RedirectResponse(f"/dhcp?message=DHCPv{family}+backup+restored", status_code=303)
 
 
 @router.post("/dhcp/{family}/service")
