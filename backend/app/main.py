@@ -22,6 +22,7 @@ from .errors import AppError
 from .models import User
 from .security import get_client_ip, rate_limiter
 from .web import router as web_router
+from .web_dhcp import router as web_dhcp_router
 from .web_platform import router as web_platform_router
 
 settings = get_settings()
@@ -45,7 +46,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     title="ChrisLab DNS API",
     version=__version__,
-    description="Production-oriented BIND9 management API with transactional validation, RBAC, audit logging and backups.",
+    description="Production-oriented BIND9 and Kea DHCP management API with transactional validation, RBAC, audit logging and backups.",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -148,4 +149,5 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(web_platform_router)
+app.include_router(web_dhcp_router)
 app.include_router(web_router)
