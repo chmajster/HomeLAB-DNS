@@ -1,5 +1,5 @@
 # Installed as /etc/sudoers.d/bind9-web-manager with mode 0440.
 Cmnd_Alias CHRISLAB_DNS_HELPER = /usr/local/libexec/bind9-web-manager-helper *
-Cmnd_Alias CHRISLAB_DHCP_READ = /usr/local/libexec/chrislab-dhcp-helper status *, /usr/local/libexec/chrislab-dhcp-helper leases *, /usr/local/libexec/chrislab-dhcp-helper logs *, /usr/local/libexec/chrislab-dhcp-helper read-config *
-Cmnd_Alias CHRISLAB_DHCP_WRITE = /usr/local/libexec/chrislab-dhcp-helper validate *, /usr/local/libexec/chrislab-dhcp-helper apply *, /usr/local/libexec/chrislab-dhcp-helper service *
+Cmnd_Alias CHRISLAB_DHCP_READ = /usr/local/libexec/chrislab-dhcp-helper status *, /usr/local/libexec/chrislab-dhcp-helper leases *, /usr/local/libexec/chrislab-dhcp-helper logs *, /usr/local/libexec/chrislab-dhcp-helper read-config *, /usr/local/libexec/chrislab-dhcp-helper backups *
+Cmnd_Alias CHRISLAB_DHCP_WRITE = /usr/local/libexec/chrislab-dhcp-helper validate *, /usr/local/libexec/chrislab-dhcp-helper apply *, /usr/local/libexec/chrislab-dhcp-helper service *, /usr/local/libexec/chrislab-dhcp-helper restore *
 bind9-web-manager ALL=(root) NOPASSWD: CHRISLAB_DNS_HELPER, CHRISLAB_DHCP_READ, CHRISLAB_DHCP_WRITE
