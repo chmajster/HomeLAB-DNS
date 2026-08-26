@@ -435,7 +435,7 @@ if [[ "$SILENT" == true || -n "$RESULT_JSON" ]]; then
   rm -f "$BASE_RESULT_JSON"
   base_args+=(--result-json "$BASE_RESULT_JSON")
 fi
-"$BASE_INSTALLER" "${base_args[@]}"
+CHRISLAB_WRAPPED_INSTALL=1 "$BASE_INSTALLER" "${base_args[@]}"
 
 BIND_OPTIONS="/etc/bind/named.conf.options"
 BIND_CONFIG="/etc/bind/named.conf"
@@ -581,6 +581,25 @@ panel_url="http://${host_for_url}:${PUBLIC_PORT}/"
 api_token_configured=false
 [[ -n "$PANEL_API_TOKEN" ]] && api_token_configured=true
 
+if [[ "$WEB_UI_IP" == "0.0.0.0" ]]; then
+  panel_check_host="127.0.0.1"
+elif [[ "$WEB_UI_IP" == "::" ]]; then
+  panel_check_host="[::1]"
+else
+  [[ "$WEB_UI_IP" == *:* ]] && panel_check_host="[$WEB_UI_IP]" || panel_check_host="$WEB_UI_IP"
+fi
+health_url="http://${panel_check_host}:${PUBLIC_PORT}/api/v1/health"
+panel_available=false
+panel_http_status="000"
+for _ in {1..10}; do
+  panel_http_status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$health_url" 2>/dev/null || true)"
+  if [[ "$panel_http_status" =~ ^2[0-9][0-9]$ ]]; then
+    panel_available=true
+    break
+  fi
+  sleep 1
+done
+
 if [[ -n "$RESULT_JSON" ]]; then
   result_parent="$(dirname "$RESULT_JSON")"
   if [[ ! -d "$result_parent" ]]; then
@@ -594,7 +613,7 @@ if [[ -n "$RESULT_JSON" ]]; then
   [[ "$CONFIG_LOADED" == true ]] && provisioning_config="$CONFIG_FILE"
   RESULT_JSON="$RESULT_JSON" BASE_RESULT_JSON="$BASE_RESULT_JSON" PANEL_URL="$panel_url" WEB_UI_IP="$WEB_UI_IP" \
   PUBLIC_PORT="$PUBLIC_PORT" FORWARD_DNS_SERVER="$FORWARD_DNS_SERVER" PROVISIONING_CONFIG="$provisioning_config" \
-  API_TOKEN_CONFIGURED="$api_token_configured" python3 - <<'PY'
+  API_TOKEN_CONFIGURED="$api_token_configured" PANEL_AVAILABLE="$panel_available" PANEL_HTTP_STATUS="$panel_http_status" python3 - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -604,6 +623,8 @@ result = json.loads(base_path.read_text(encoding="utf-8")) if base_path is not N
 result["url"] = os.environ["PANEL_URL"]
 result["web_ui_ip"] = os.environ["WEB_UI_IP"]
 result["port"] = int(os.environ["PUBLIC_PORT"])
+result["panel_available"] = os.environ["PANEL_AVAILABLE"] == "true"
+result["panel_http_status"] = int(os.environ["PANEL_HTTP_STATUS"] or "0")
 result["forward_dns_server"] = os.environ["FORWARD_DNS_SERVER"]
 result["provisioning_config"] = os.environ["PROVISIONING_CONFIG"] or None
 result["api_token_configured"] = os.environ["API_TOKEN_CONFIGURED"] == "true"
@@ -615,15 +636,23 @@ path.chmod(0o600)
 PY
 fi
 
+print_panel_status() {
+  echo "Panel availability: $([[ "$panel_available" == true ]] && echo AVAILABLE || echo UNAVAILABLE)"
+  echo "Panel URL: $panel_url"
+  echo "Web UI port: $PUBLIC_PORT"
+  echo "HTTP status: $panel_http_status"
+}
+
 if [[ "$SILENT" == true ]]; then
+  print_panel_status
+  [[ -n "$RESULT_JSON" ]] && echo "Installation result: $RESULT_JSON"
   exit 0
 fi
 
 echo "HomeLAB-DNS installation completed."
-echo "Panel URL: $panel_url"
+print_panel_status
 echo "Authentication: local application account (PAM or LDAP can be selected in Settings)"
 echo "Web UI listen IP: $WEB_UI_IP"
-echo "Web UI port: $PUBLIC_PORT"
 echo "Forward DNS server: $FORWARD_DNS_SERVER"
 echo "Panel login: $PANEL_LOGIN"
 echo "API token configured: $api_token_configured"
