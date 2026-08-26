@@ -34,7 +34,7 @@ def init_db() -> None:
 
 
 def ensure_schema_columns() -> None:
-    """Apply additive migrations required by upgrades from pre-0.2 databases.
+    """Apply additive migrations required by upgrades from older databases.
 
     New tables are created by ``create_all``. Existing SQLAlchemy tables need
     explicit ADD COLUMN statements because ``create_all`` deliberately does not
@@ -53,6 +53,7 @@ def ensure_schema_columns() -> None:
             "allow_transfer": "JSON NOT NULL DEFAULT '[]'",
             "also_notify": "JSON NOT NULL DEFAULT '[]'",
             "tsig_key_name": "VARCHAR(120)",
+            "dnssec_policy": "VARCHAR(32) NOT NULL DEFAULT 'none'",
         },
     }
     with engine.begin() as connection:
