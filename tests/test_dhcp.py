@@ -5,6 +5,7 @@ import pytest
 from backend.app.dhcp_schemas import DhcpGlobalUpdate, DhcpPoolCreate, DhcpReservationCreate, DhcpSubnetCreate
 from backend.app.errors import AppError
 from backend.app.services.dhcp import DhcpService
+from backend.app.services.dhcp_runtime import DhcpRuntimeOps
 
 
 def test_default_dhcp4_draft_is_safe_and_empty(db):
@@ -117,3 +118,43 @@ def test_dhcp_api_draft_crud(client, auth_headers):
     )
     assert response.status_code == 201
     assert response.json()["Dhcp4"]["subnet4"][0]["reservations"][0]["hostname"] == "nas"
+
+
+def test_runtime_interfaces_do_not_require_socket_interface_lookup(db, monkeypatch):
+    def blocked_socket_lookup():
+        raise OSError(97, "Address family not supported by protocol")
+
+    monkeypatch.setattr("backend.app.services.dhcp_runtime.socket.if_nameindex", blocked_socket_lookup)
+    interfaces = DhcpRuntimeOps(DhcpService(db)).interfaces()
+    assert "lo" not in interfaces
+    assert isinstance(interfaces, list)
+
+
+def test_runtime_restore_rejects_path_traversal(db):
+    runtime = DhcpRuntimeOps(DhcpService(db))
+    with pytest.raises(AppError) as exc:
+        runtime.restore(4, "../kea-dhcp4-20260826T100000Z.json")
+    assert exc.value.code == "INVALID_DHCP_BACKUP"
+
+
+def test_dhcp_backup_api(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        DhcpRuntimeOps,
+        "backups",
+        lambda self, family: [{"name": f"kea-dhcp{family}-20260826T100000Z.json", "size": 321, "mtime": 1}],
+    )
+    response = client.get("/api/v1/dhcp/4/backups", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "kea-dhcp4-20260826T100000Z.json"
+
+
+def test_dhcp_restore_api(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(DhcpRuntimeOps, "restore", lambda self, family, name: "RESTORE_OK")
+    monkeypatch.setattr(DhcpService, "import_active", lambda self, family: self.load_draft(family))
+    response = client.post(
+        "/api/v1/dhcp/4/backups/kea-dhcp4-20260826T100000Z.json/restore",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "restored"
+    assert response.json()["backup"] == "kea-dhcp4-20260826T100000Z.json"
