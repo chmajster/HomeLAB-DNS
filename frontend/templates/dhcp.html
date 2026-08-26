@@ -2,12 +2,12 @@
 {% block title %}DHCP · ChrisLab DNS{% endblock %}
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between gap-3 mb-4">
-  <div><h1 class="h3 mb-1">DHCP Server</h1><p class="text-body-secondary mb-0">Kea DHCPv4/DHCPv6 — konfiguracja, subnety, pule, rezerwacje, opcje, lease'y i usługi.</p></div>
+  <div><h1 class="h3 mb-1">DHCP Server</h1><p class="text-body-secondary mb-0">Kea DHCPv4/DHCPv6 — konfiguracja, subnety, pule, rezerwacje, opcje, lease'y, backupy i usługi.</p></div>
 </div>
 {% if message %}<div class="alert alert-success">{{ message }}</div>{% endif %}
 <div class="alert alert-warning"><strong>Ochrona przed rogue DHCP:</strong> instalator nie uruchamia automatycznie Kea. Najpierw zapisz konfigurację, użyj <strong>Validate</strong>, potem <strong>Apply</strong> i dopiero uruchom usługę. Zaawansowany JSON obsługuje pełną konfigurację Kea z wyjątkiem <code>hooks-libraries</code>, które są blokowane ze względów bezpieczeństwa.</div>
 
-{% macro family_panel(family, config, raw, status, leases, logs, runtime_error) %}
+{% macro family_panel(family, config, raw, status, leases, logs, runtime_error, backups, backup_error) %}
 {% set subnet_key = 'subnet4' if family == 4 else 'subnet6' %}
 {% set subnets = config.get(subnet_key, []) %}
 {% set options = config.get('option-data', []) %}
@@ -43,14 +43,21 @@
     </div></div></div>
 
     <div class="col-xl-6"><div class="card h-100"><div class="card-body">
-      <h3 class="h5">Wdrożenie</h3>
-      <p class="text-body-secondary">Draft nie zmienia aktywnego serwera. Validate uruchamia parser Kea, Apply wykonuje backup i atomową zmianę pliku.</p>
+      <h3 class="h5">Wdrożenie i backup</h3>
+      <p class="text-body-secondary">Draft nie zmienia aktywnego serwera. Validate uruchamia parser Kea, Apply wykonuje backup i atomową zmianę pliku. Restore ponownie waliduje backup i tworzy dodatkowy backup bezpieczeństwa bieżącej konfiguracji.</p>
       {% if can_manage %}<div class="d-flex flex-wrap gap-2 mb-3">
         <form method="post" action="/dhcp/{{ family }}/validate"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-outline-primary">Validate</button></form>
         <form method="post" action="/dhcp/{{ family }}/apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-primary">Apply</button></form>
         <form method="post" action="/dhcp/{{ family }}/import"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-outline-secondary">Import aktywnego Kea</button></form>
       </div>{% endif %}
-      <div class="small"><strong>Lease DB:</strong> {{ config.get('lease-database', {}).get('type', 'memfile') }} · {{ config.get('lease-database', {}).get('name', 'default') }}</div>
+      <div class="small mb-3"><strong>Lease DB:</strong> {{ config.get('lease-database', {}).get('type', 'memfile') }} · {{ config.get('lease-database', {}).get('name', 'default') }}</div>
+      <h4 class="h6">Backupy konfiguracji</h4>
+      {% if backup_error %}<div class="alert alert-warning py-2">Backup: {{ backup_error }}</div>{% endif %}
+      {% if backups %}
+        <div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Plik</th><th>Rozmiar</th><th></th></tr></thead><tbody>
+        {% for backup in backups %}<tr><td class="font-monospace small">{{ backup.get('name') }}</td><td class="small">{{ backup.get('size', 0) }} B</td><td class="text-end">{% if can_manage %}<form method="post" action="/dhcp/{{ family }}/restore" onsubmit="return confirm('Przywrócić backup {{ backup.get('name') }}? Aktywna konfiguracja zostanie wcześniej zabezpieczona.');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="backup_name" value="{{ backup.get('name') }}"><button class="btn btn-sm btn-outline-warning">Restore</button></form>{% endif %}</td></tr>{% endfor %}
+        </tbody></table></div>
+      {% else %}<div class="text-body-secondary small">Brak backupów. Pierwszy zostanie utworzony przy Apply, jeżeli istnieje aktywna konfiguracja Kea.</div>{% endif %}
     </div></div></div>
 
     <div class="col-12"><div class="card"><div class="card-body">
@@ -104,7 +111,7 @@
 
 <ul class="nav nav-tabs" role="tablist"><li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dhcp4" type="button">DHCPv4</button></li><li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dhcp6" type="button">DHCPv6</button></li></ul>
 <div class="tab-content">
-{{ family_panel(4, config4, raw4, status4, leases4, logs4, error4) }}
-{{ family_panel(6, config6, raw6, status6, leases6, logs6, error6) }}
+{{ family_panel(4, config4, raw4, status4, leases4, logs4, error4, backups4, backup_error4) }}
+{{ family_panel(6, config6, raw6, status6, leases6, logs6, error6, backups6, backup_error6) }}
 </div>
 {% endblock %}
