@@ -1,9 +1,38 @@
 {% extends "base.html" %}{% block title %}Logowanie · ChrisLab DNS{% endblock %}{% block anonymous %}
-<div class="min-vh-100 d-flex align-items-center justify-content-center bg-body-tertiary p-3"><div class="card shadow-sm login-card"><div class="card-body p-4">
-<h1 class="h4 mb-1">ChrisLab DNS</h1><p class="text-body-secondary mb-2">Panel zarządzania BIND9</p>
-<p class="small text-body-secondary mb-4">Tryb logowania: {% if auth_mode == 'local' %}<strong>konto lokalne aplikacji</strong>{% elif auth_mode == 'pam' %}<strong>Linux / PAM</strong>{% else %}<strong>LDAP</strong>{% endif %}.</p>
-{% if auth_mode == 'local' %}<div class="alert alert-warning py-2 small">Domyślna instalacja: <code>admin</code> / <code>admin</code>. Zmień dane po pierwszym logowaniu.</div>{% endif %}
-{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-<form method="post" action="/login"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="mb-3"><label class="form-label">Użytkownik</label><input class="form-control" name="username" autocomplete="username" required></div><div class="mb-3"><label class="form-label">Hasło</label><input class="form-control" type="password" name="password" autocomplete="current-password" required></div><button class="btn btn-primary w-100">Zaloguj</button></form>
-</div></div></div>
+<div class="auth-shell">
+  <section class="auth-visual" aria-hidden="true">
+    <a class="app-brand" href="/">
+      <span class="brand-mark"><i class="bi bi-diagram-3-fill"></i></span>
+      <span><strong>ChrisLab</strong><small>DNS Platform</small></span>
+    </a>
+    <div class="auth-copy">
+      <div class="page-kicker text-white-50 mb-3">Network control plane</div>
+      <h1>DNS operations without the legacy admin-panel feel.</h1>
+      <p>Zarządzaj BIND9, strefami, rekordami, DHCP, backupami i audytem z jednego panelu.</p>
+    </div>
+    <div class="small text-white-50">ChrisLab infrastructure management</div>
+  </section>
+
+  <section class="auth-panel">
+    <div class="login-card card">
+      <div class="card-body">
+        <div class="login-brand-mobile">
+          <span class="brand-mark"><i class="bi bi-diagram-3-fill"></i></span>
+          <div><strong class="d-block">ChrisLab DNS</strong><small class="text-body-secondary">Infrastructure management</small></div>
+        </div>
+        <div class="auth-mode-pill mb-3"><i class="bi bi-shield-check"></i>{% if auth_mode == 'local' %}Local account{% elif auth_mode == 'pam' %}Linux / PAM{% else %}LDAP{% endif %}</div>
+        <h2 class="h2 fw-bold mb-2">Zaloguj się</h2>
+        <p class="text-body-secondary mb-4">Uzyskaj dostęp do panelu zarządzania usługami DNS.</p>
+        {% if auth_mode == 'local' %}<div class="alert alert-warning small"><i class="bi bi-exclamation-triangle-fill me-2"></i>Domyślna instalacja: <code>admin</code> / <code>admin</code>. Zmień dane po pierwszym logowaniu.</div>{% endif %}
+        {% if error %}<div class="alert alert-danger"><i class="bi bi-x-circle-fill me-2"></i>{{ error }}</div>{% endif %}
+        <form method="post" action="/login">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="mb-3"><label class="form-label" for="username">Użytkownik</label><div class="input-group"><span class="input-group-text bg-body border-end-0"><i class="bi bi-person"></i></span><input id="username" class="form-control border-start-0 ps-0" name="username" autocomplete="username" required autofocus></div></div>
+          <div class="mb-4"><label class="form-label" for="password">Hasło</label><div class="input-group"><span class="input-group-text bg-body border-end-0"><i class="bi bi-lock"></i></span><input id="password" class="form-control border-start-0 ps-0" type="password" name="password" autocomplete="current-password" required></div></div>
+          <button class="btn btn-primary w-100 py-2"><span>Zaloguj</span><i class="bi bi-arrow-right ms-2"></i></button>
+        </form>
+      </div>
+    </div>
+  </section>
+</div>
 {% endblock %}
