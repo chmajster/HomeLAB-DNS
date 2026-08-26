@@ -18,21 +18,23 @@ DNSSEC_POLICIES = {"none", "default", "insecure"}
 DNSSEC_RUNTIME_DIR = Path(os.getenv("BIND_DNSSEC_DIR", "/var/cache/bind/chrislab-dnssec"))
 
 
-def _install_zone_stanza_patch() -> None:
-    """Teach ZoneService to point signed primary zones at a writable runtime copy.
+def _install_zone_patches() -> None:
+    """Integrate BIND inline signing without making /etc/bind/zones writable.
 
-    Canonical unsigned zone files stay under /etc/bind/zones and remain managed
-    transactionally by the privileged helper. BIND's inline signer uses a copy
-    under /var/cache/bind, where it may safely create .signed/.jnl/.jbk files.
+    Canonical unsigned files remain under /etc/bind/zones and are still written
+    through the privileged transactional helper. Signed primary zones use a
+    synchronized runtime copy below /var/cache/bind so named can safely create
+    its .signed, .jnl and key state next to that copy.
     """
 
-    if getattr(ZoneService, "_dnssec_stanza_installed", False):
+    if getattr(ZoneService, "_dnssec_patches_installed", False):
         return
 
-    original = ZoneService._zone_stanza
+    original_stanza = ZoneService._zone_stanza
+    original_apply = ZoneService._apply
 
     def dnssec_zone_stanza(self: ZoneService, zone: Zone) -> list[str]:
-        lines = original(self, zone)
+        lines = original_stanza(self, zone)
         policy = getattr(zone, "dnssec_policy", "none") or "none"
         if policy == "none":
             return lines
@@ -52,11 +54,24 @@ def _install_zone_stanza_patch() -> None:
             raise AppError("DNSSEC_ZONE_FILE_MISSING", "Primary zone stanza has no file directive", 500)
         return lines
 
+    def dnssec_apply(self: ZoneService, zone: Zone, reason: str, username: str) -> str:
+        policy = getattr(zone, "dnssec_policy", "none") or "none"
+        if policy == "none":
+            return original_apply(self, zone, reason, username)
+
+        dnssec = DnssecService(self.db)
+        runtime_path = dnssec._runtime_path(zone)
+        existed, previous = dnssec._snapshot_runtime(runtime_path)
+        dnssec._write_runtime(runtime_path, render_zone(zone))
+        try:
+            return original_apply(self, zone, reason, username)
+        except Exception:
+            dnssec._restore_runtime(runtime_path, existed, previous)
+            raise
+
     ZoneService._zone_stanza = dnssec_zone_stanza  # type: ignore[method-assign]
-    ZoneService._dnssec_stanza_installed = True  # type: ignore[attr-defined]
-
-
-_install_zone_stanza_patch()
+    ZoneService._apply = dnssec_apply  # type: ignore[method-assign]
+    ZoneService._dnssec_patches_installed = True  # type: ignore[attr-defined]
 
 
 class DnssecService:
@@ -196,3 +211,6 @@ class DnssecService:
         except Exception as exc:
             result["error"] = str(exc)
         return result
+
+
+_install_zone_patches()
