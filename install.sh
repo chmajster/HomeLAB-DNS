@@ -441,7 +441,19 @@ fi
 
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 host_ip="${host_ip:-127.0.0.1}"
+public_port="80"
 install_url="http://${host_ip}/"
+health_url="http://127.0.0.1:${public_port}/api/v1/health"
+panel_available=false
+panel_http_status="000"
+for _ in {1..10}; do
+  panel_http_status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$health_url" 2>/dev/null || true)"
+  if [[ "$panel_http_status" =~ ^2[0-9][0-9]$ ]]; then
+    panel_available=true
+    break
+  fi
+  sleep 1
+done
 
 if [[ -n "$RESULT_JSON" ]]; then
   result_parent="$(dirname "$RESULT_JSON")"
@@ -452,7 +464,8 @@ if [[ -n "$RESULT_JSON" ]]; then
   result_parent_mode="$(stat -c %a "$result_parent")"
   (( (8#$result_parent_mode & 8#022) == 0 )) || fail "--result-json parent must not be group/world writable"
   [[ ! -L "$RESULT_JSON" ]] || fail "--result-json target must not be a symbolic link"
-  RESULT_URL="$install_url" RESULT_ADMIN_USERNAME="$ADMIN_USERNAME" RESULT_ADMIN_STATUS="$ADMIN_STATUS" RESULT_SYNC="$sync_output" python3 - "$RESULT_JSON" <<'PY'
+  RESULT_URL="$install_url" RESULT_PORT="$public_port" RESULT_PANEL_AVAILABLE="$panel_available" RESULT_PANEL_HTTP_STATUS="$panel_http_status" \
+  RESULT_ADMIN_USERNAME="$ADMIN_USERNAME" RESULT_ADMIN_STATUS="$ADMIN_STATUS" RESULT_SYNC="$sync_output" python3 - "$RESULT_JSON" <<'PY'
 import json
 import os
 import sys
@@ -460,6 +473,9 @@ from pathlib import Path
 result = {
     "status": "installed",
     "url": os.environ["RESULT_URL"],
+    "port": int(os.environ["RESULT_PORT"]),
+    "panel_available": os.environ["RESULT_PANEL_AVAILABLE"] == "true",
+    "panel_http_status": int(os.environ["RESULT_PANEL_HTTP_STATUS"] or "0"),
     "authentication": "local",
     "authentication_modes": ["local", "pam", "ldap"],
     "admin": {
@@ -474,7 +490,22 @@ os.chmod(path, 0o600)
 PY
 fi
 
+print_panel_status() {
+  echo "Panel availability: $([[ "$panel_available" == true ]] && echo AVAILABLE || echo UNAVAILABLE)"
+  echo "Panel URL: $install_url"
+  echo "Web UI port: $public_port"
+  echo "HTTP status: $panel_http_status"
+}
+
+if [[ "${CHRISLAB_WRAPPED_INSTALL:-0}" != "1" ]]; then
+  print_panel_status
+fi
+
 if [[ "$SILENT" == true && -n "$RESULT_JSON" ]]; then
+  exit 0
+fi
+
+if [[ "${CHRISLAB_WRAPPED_INSTALL:-0}" == "1" ]]; then
   exit 0
 fi
 
