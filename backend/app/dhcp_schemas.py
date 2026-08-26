@@ -113,4 +113,4 @@ class DhcpOptionCreate(BaseModel):
 
 
 class DhcpServiceAction(BaseModel):
-    action: Literal["start", "stop", "restart"]
+    action: Literal["start", "stop", "restart", "enable", "disable", "enable-start", "disable-stop"]
