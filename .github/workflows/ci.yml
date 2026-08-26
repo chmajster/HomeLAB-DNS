@@ -31,13 +31,15 @@ jobs:
             echo "=== installer log ==="
             sudo tail -n 120 /var/log/chrislab-dns-install.log 2>/dev/null || true
             echo "=== service status ==="
-            sudo systemctl --no-pager -l status bind9-web-manager bind9 nginx 2>/dev/null || true
+            sudo systemctl --no-pager -l status bind9-web-manager bind9 nginx kea-dhcp4-server kea-dhcp6-server 2>/dev/null || true
             echo "=== application journal ==="
             sudo journalctl -u bind9-web-manager -n 120 --no-pager 2>/dev/null || true
             echo "=== nginx journal ==="
             sudo journalctl -u nginx -n 80 --no-pager 2>/dev/null || true
+            echo "=== Kea DHCPv4 journal ==="
+            sudo journalctl -u kea-dhcp4-server -n 80 --no-pager 2>/dev/null || true
             echo "=== listeners ==="
-            sudo ss -ltnp 2>/dev/null || true
+            sudo ss -ltnup 2>/dev/null || true
             exit "$rc"
           }
           trap diagnostics ERR
@@ -72,6 +74,33 @@ jobs:
           sudo named-checkconf /etc/bind/named.conf
           wait_for_web
 
+          # Install the DHCP module on a fresh host. Newly introduced DHCP
+          # services must remain stopped and disabled until explicitly enabled.
+          sudo ./install_dhcp.sh
+          sudo test -x /usr/local/libexec/chrislab-dhcp-helper
+          sudo test -f /etc/chrislab-dhcp-helper.conf
+          ! sudo systemctl is-active --quiet kea-dhcp4-server
+          ! sudo systemctl is-enabled --quiet kea-dhcp4-server
+          ! sudo systemctl is-active --quiet kea-dhcp6-server
+          ! sudo systemctl is-enabled --quiet kea-dhcp6-server
+          sudo -u bind9-web-manager tee /var/lib/bind9-web-manager/staging/dhcp4-ci.json >/dev/null <<'JSON'
+          {
+            "Dhcp4": {
+              "interfaces-config": {"interfaces": []},
+              "lease-database": {"type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases4.csv"},
+              "valid-lifetime": 3600,
+              "renew-timer": 900,
+              "rebind-timer": 1800,
+              "authoritative": true,
+              "option-data": [],
+              "subnet4": []
+            }
+          }
+          JSON
+          sudo /usr/local/libexec/chrislab-dhcp-helper validate --family 4 --file /var/lib/bind9-web-manager/staging/dhcp4-ci.json
+          sudo /usr/local/libexec/chrislab-dhcp-helper status --family 4 | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["family"] == 4 and not s["active"]'
+          wait_for_web
+
           login_status() {
             local username="$1" password="$2" jar="$3" base="${4:-http://127.0.0.1}" page csrf
             page="$(mktemp)"
@@ -97,6 +126,10 @@ jobs:
           test "$(login_status admin admin "$jar")" = "303"
           curl -fsS -b "$jar" http://127.0.0.1/ >/tmp/chrislab-dashboard.html
           grep -q 'ChrisLab DNS' /tmp/chrislab-dashboard.html
+          curl -fsS -b "$jar" http://127.0.0.1/dhcp >/tmp/chrislab-dhcp.html
+          grep -q 'DHCP Server' /tmp/chrislab-dhcp.html
+          grep -q 'DHCPv4' /tmp/chrislab-dhcp.html
+          grep -q 'DHCPv6' /tmp/chrislab-dhcp.html
 
           curl -fsS -b "$jar" http://127.0.0.1/settings -o /tmp/chrislab-settings.html
           csrf="$(python3 - <<'PY'
