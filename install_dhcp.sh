@@ -26,7 +26,7 @@ done
 if [[ ${EUID} -ne 0 ]]; then
   exec sudo -E bash "$0" "${ORIGINAL_ARGS[@]}"
 fi
-if [[ ! -f "$ENV_FILE" ]]; then
+if [[ ! -f "$ENV_FILE" || ! -d "$APP_DIR" ]]; then
   echo "ChrisLab-DNS must be installed before the DHCP module." >&2
   exit 1
 fi
@@ -49,7 +49,7 @@ dpkg-query -W -f='${Status}' kea-dhcp6-server 2>/dev/null | grep -q 'install ok 
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y kea-dhcp4-server kea-dhcp6-server
+apt-get install -y kea-dhcp4-server kea-dhcp6-server rsync sudo
 
 # Avoid introducing a rogue DHCP service solely because the package was added.
 # Existing Kea installations keep their previous enabled/running state.
@@ -60,12 +60,16 @@ if [[ "$kea6_preexisting" == false ]]; then
   systemctl disable --now kea-dhcp6-server >/dev/null 2>&1 || true
 fi
 
-if [[ -d "$APP_DIR" && "$SOURCE_DIR" != "$APP_DIR" ]]; then
-  install -o root -g root -m 0755 "$SOURCE_DIR/scripts/dhcp_privileged_helper.py" "$APP_DIR/scripts/dhcp_privileged_helper.py"
-  install -o root -g root -m 0440 "$SOURCE_DIR/config/sudoers" "$APP_DIR/config/sudoers"
+# When invoked from a checked-out repository, deploy the complete application
+# changes as well as the privileged helper. The venv and local runtime files are
+# preserved. update.sh already runs from APP_DIR, so this is a no-op there.
+if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
+  rsync -a --delete --exclude '.git/' --exclude '.env' --exclude '.venv/' --exclude 'venv/' "$SOURCE_DIR/" "$APP_DIR/"
 fi
+chown -R root:root "$APP_DIR"
+
 install -d -o root -g root -m 0755 /usr/local/libexec
-install -o root -g root -m 0755 "$SOURCE_DIR/scripts/dhcp_privileged_helper.py" /usr/local/libexec/chrislab-dhcp-helper
+install -o root -g root -m 0755 "$APP_DIR/scripts/dhcp_privileged_helper.py" /usr/local/libexec/chrislab-dhcp-helper
 install -d -o root -g root -m 0750 "$DATA_DIR/dhcp-backups"
 install -d -o "$APP_USER" -g "$APP_GROUP" -m 0750 "$DATA_DIR/staging"
 
@@ -80,7 +84,7 @@ CONF
 chown root:root "$DHCP_HELPER_CONF"
 chmod 0600 "$DHCP_HELPER_CONF"
 
-install -o root -g root -m 0440 "$SOURCE_DIR/config/sudoers" /etc/sudoers.d/bind9-web-manager
+install -o root -g root -m 0440 "$APP_DIR/config/sudoers" /etc/sudoers.d/bind9-web-manager
 visudo -cf /etc/sudoers.d/bind9-web-manager >/dev/null
 
 if ! grep -q '^DHCP_HELPER=' "$ENV_FILE"; then
