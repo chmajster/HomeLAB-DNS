@@ -18,6 +18,7 @@ from ..errors import AppError
 from ..models import AppState
 
 UNSAFE_KEYS = {"hooks-libraries"}
+SERVICE_ACTIONS = {"start", "stop", "restart", "enable", "disable", "enable-start", "disable-stop"}
 
 
 def _family_root(family: int) -> str:
@@ -34,32 +35,27 @@ def _subnet_key(family: int) -> str:
 
 def _default_config(family: int) -> dict[str, Any]:
     root = _family_root(family)
+    common: dict[str, Any] = {
+        "interfaces-config": {"interfaces": []},
+        "lease-database": {
+            "type": "memfile",
+            "persist": True,
+            "name": f"/var/lib/kea/kea-leases{family}.csv",
+        },
+        "valid-lifetime": 3600,
+        "renew-timer": 900,
+        "rebind-timer": 1800,
+        "option-data": [],
+        _subnet_key(family): [],
+    }
     if family == 4:
-        body: dict[str, Any] = {
-            "interfaces-config": {"interfaces": []},
-            "lease-database": {"type": "memfile", "persist": True, "name": "/var/lib/kea/kea-leases4.csv"},
-            "valid-lifetime": 3600,
-            "renew-timer": 900,
-            "rebind-timer": 1800,
-            "authoritative": True,
-            "option-data": [],
-            "subnet4": [],
-        }
+        common["authoritative"] = True
     else:
-        body = {
-            "interfaces-config": {"interfaces": []},
-            "lease-database": {"type": "memfile", "persist": True, "name": "/var/lib/kea/kea-leases6.csv"},
-            "preferred-lifetime": 1800,
-            "valid-lifetime": 3600,
-            "renew-timer": 900,
-            "rebind-timer": 1800,
-            "option-data": [],
-            "subnet6": [],
-        }
-    return {root: body}
+        common["preferred-lifetime"] = 1800
+    return {root: common}
 
 
-def _reject_unsafe(value: Any, path: str = "$" ) -> None:
+def _reject_unsafe(value: Any, path: str = "$") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             if key in UNSAFE_KEYS:
@@ -80,21 +76,23 @@ def _validate_document(family: int, document: dict[str, Any]) -> dict[str, Any]:
     if set(document) != {root} or not isinstance(document.get(root), dict):
         raise AppError("INVALID_DHCP_CONFIG", f"Configuration must contain exactly one top-level '{root}' object", 422)
     _reject_unsafe(document)
-    body = document[root]
-    subnets = body.get(_subnet_key(family), [])
+    subnets = document[root].get(_subnet_key(family), [])
     if not isinstance(subnets, list):
         raise AppError("INVALID_DHCP_CONFIG", f"{_subnet_key(family)} must be a list", 422)
     return document
 
 
-def _normalize_pool(network: ipaddress._BaseNetwork, value: str) -> str:
+def _normalize_pool(network: Any, value: str) -> str:
     raw = value.strip()
     if not raw:
         raise AppError("INVALID_DHCP_POOL", "Pool cannot be empty", 422)
     if " - " in raw:
         left, right = [item.strip() for item in raw.split(" - ", 1)]
-        first = ipaddress.ip_address(left)
-        last = ipaddress.ip_address(right)
+        try:
+            first = ipaddress.ip_address(left)
+            last = ipaddress.ip_address(right)
+        except ValueError as exc:
+            raise AppError("INVALID_DHCP_POOL", "Pool contains an invalid IP address", 422, str(exc)) from exc
         if first.version != network.version or last.version != network.version or first not in network or last not in network or int(first) > int(last):
             raise AppError("INVALID_DHCP_POOL", "Pool range must stay inside the subnet", 422)
         return f"{first} - {last}"
@@ -138,12 +136,11 @@ class DhcpService:
         value = _validate_document(family, deepcopy(document))
         key = self._state_key(family)
         row = self.db.get(AppState, key)
-        payload = json.dumps(value, sort_keys=True, indent=2)
+        encoded = json.dumps(value, sort_keys=True, indent=2)
         if row is None:
-            row = AppState(key=key, value=payload)
-            self.db.add(row)
+            self.db.add(AppState(key=key, value=encoded))
         else:
-            row.value = payload
+            row.value = encoded
         self.db.commit()
         return value
 
@@ -171,16 +168,13 @@ class DhcpService:
         if not isinstance(options, list):
             options = []
             body["option-data"] = options
-        dns_name = "domain-name-servers" if family == 4 else "dns-servers"
-        domain_name = "domain-name" if family == 4 else "domain-search"
-        _upsert_option(options, dns_name, ", ".join(payload.dns_servers) if payload.dns_servers else None)
-        _upsert_option(options, domain_name, payload.domain_name)
+        _upsert_option(options, "domain-name-servers" if family == 4 else "dns-servers", ", ".join(payload.dns_servers) or None)
+        _upsert_option(options, "domain-name" if family == 4 else "domain-search", payload.domain_name)
         return self.save_draft(family, document)
 
     def _subnets(self, family: int, document: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         document = document or self.load_draft(family)
-        body = document[_family_root(family)]
-        result = body.setdefault(_subnet_key(family), [])
+        result = document[_family_root(family)].setdefault(_subnet_key(family), [])
         if not isinstance(result, list):
             raise AppError("INVALID_DHCP_CONFIG", f"{_subnet_key(family)} must be a list", 422)
         return result
@@ -226,9 +220,9 @@ class DhcpService:
     def delete_subnet(self, family: int, subnet_id: int) -> dict[str, Any]:
         document = self.load_draft(family)
         subnets = self._subnets(family, document)
-        original = len(subnets)
+        old_size = len(subnets)
         subnets[:] = [item for item in subnets if int(item.get("id", -1)) != subnet_id]
-        if len(subnets) == original:
+        if len(subnets) == old_size:
             raise AppError("DHCP_SUBNET_NOT_FOUND", "DHCP subnet not found", 404)
         return self.save_draft(family, document)
 
@@ -245,8 +239,7 @@ class DhcpService:
 
     def delete_pool(self, family: int, subnet_id: int, pool_index: int) -> dict[str, Any]:
         document = self.load_draft(family)
-        subnet = self._find_subnet(family, subnet_id, document)
-        pools = subnet.setdefault("pools", [])
+        pools = self._find_subnet(family, subnet_id, document).setdefault("pools", [])
         if pool_index < 0 or pool_index >= len(pools):
             raise AppError("DHCP_POOL_NOT_FOUND", "DHCP pool not found", 404)
         pools.pop(pool_index)
@@ -263,23 +256,18 @@ class DhcpService:
         if address.version != family or address not in network:
             raise AppError("INVALID_DHCP_RESERVATION", "Reserved address must belong to the subnet", 422)
         reservation: dict[str, Any] = {payload.identifier_type: payload.identifier}
-        if family == 4:
-            reservation["ip-address"] = str(address)
-        else:
-            reservation["ip-addresses"] = [str(address)]
+        reservation["ip-address" if family == 4 else "ip-addresses"] = str(address) if family == 4 else [str(address)]
         if payload.hostname:
             reservation["hostname"] = payload.hostname
         reservations = subnet.setdefault("reservations", [])
-        for item in reservations:
-            if item.get(payload.identifier_type) == payload.identifier:
-                raise AppError("DHCP_RESERVATION_EXISTS", "Reservation identifier already exists in this subnet", 409)
+        if any(item.get(payload.identifier_type) == payload.identifier for item in reservations):
+            raise AppError("DHCP_RESERVATION_EXISTS", "Reservation identifier already exists in this subnet", 409)
         reservations.append(reservation)
         return self.save_draft(family, document)
 
     def delete_reservation(self, family: int, subnet_id: int, reservation_index: int) -> dict[str, Any]:
         document = self.load_draft(family)
-        subnet = self._find_subnet(family, subnet_id, document)
-        reservations = subnet.setdefault("reservations", [])
+        reservations = self._find_subnet(family, subnet_id, document).setdefault("reservations", [])
         if reservation_index < 0 or reservation_index >= len(reservations):
             raise AppError("DHCP_RESERVATION_NOT_FOUND", "DHCP reservation not found", 404)
         reservations.pop(reservation_index)
@@ -287,10 +275,7 @@ class DhcpService:
 
     def add_option(self, family: int, payload: DhcpOptionCreate, subnet_id: int | None = None) -> dict[str, Any]:
         document = self.load_draft(family)
-        if subnet_id is None:
-            target = document[_family_root(family)]
-        else:
-            target = self._find_subnet(family, subnet_id, document)
+        target = document[_family_root(family)] if subnet_id is None else self._find_subnet(family, subnet_id, document)
         options = target.setdefault("option-data", [])
         option: dict[str, Any] = {"data": payload.data, "csv-format": payload.csv_format}
         if payload.name:
@@ -339,24 +324,21 @@ class DhcpService:
         return path
 
     def validate_draft(self, family: int) -> str:
-        document = self.load_draft(family)
-        path = self._staged_document(family, document)
+        path = self._staged_document(family, self.load_draft(family))
         try:
             return self._run_helper("validate", "--family", str(family), "--file", str(path), timeout=60).strip()
         finally:
             path.unlink(missing_ok=True)
 
     def apply_draft(self, family: int) -> str:
-        document = self.load_draft(family)
-        path = self._staged_document(family, document)
+        path = self._staged_document(family, self.load_draft(family))
         try:
             return self._run_helper("apply", "--family", str(family), "--file", str(path), timeout=90).strip()
         finally:
             path.unlink(missing_ok=True)
 
     def import_active(self, family: int) -> dict[str, Any]:
-        raw = self._run_helper("read-config", "--family", str(family), timeout=30)
-        return self.save_raw(family, raw)
+        return self.save_raw(family, self._run_helper("read-config", "--family", str(family), timeout=30))
 
     def status(self, family: int) -> dict[str, Any]:
         raw = self._run_helper("status", "--family", str(family), timeout=30)
@@ -367,7 +349,8 @@ class DhcpService:
         return result if isinstance(result, dict) else {"active": False, "error": "invalid status"}
 
     def service_action(self, family: int, action: str) -> str:
-        if action not in {"start", "stop", "restart"}:
+        _family_root(family)
+        if action not in SERVICE_ACTIONS:
             raise AppError("INVALID_DHCP_ACTION", "Unsupported DHCP service action", 422)
         return self._run_helper("service", "--family", str(family), "--action", action, timeout=90).strip()
 
