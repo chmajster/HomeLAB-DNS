@@ -164,3 +164,24 @@ class ZoneRevision(Base):
     reason: Mapped[str] = mapped_column(String(255))
     created_by: Mapped[str] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class DnsReplicationState(Base):
+    __tablename__ = "dns_replication_states"
+    __table_args__ = (UniqueConstraint("server_id", "zone_id", name="uq_dns_replication_server_zone"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("dns_servers.id", ondelete="CASCADE"), index=True)
+    zone_id: Mapped[int] = mapped_column(ForeignKey("zones.id", ondelete="CASCADE"), index=True)
+    last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    last_serial: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    serial_lag: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    authoritative: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_in_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_transfer_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_transfer_test_type: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    last_transfer_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_transfer_test_details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_transfer_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
