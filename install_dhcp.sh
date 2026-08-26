@@ -8,10 +8,11 @@ DATA_DIR="/var/lib/bind9-web-manager"
 ENV_FILE="/etc/bind9-web-manager.env"
 DHCP_HELPER_CONF="/etc/chrislab-dhcp-helper.conf"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORIGINAL_ARGS=("$@")
 NO_RESTART=false
 
 usage() {
-  echo "Usage: ./install_dhcp.sh [--no-restart]"
+  echo "Usage: bash ./install_dhcp.sh [--no-restart]"
 }
 
 while (($#)); do
@@ -23,7 +24,7 @@ while (($#)); do
 done
 
 if [[ ${EUID} -ne 0 ]]; then
-  exec sudo -E "$0" "$@"
+  exec sudo -E bash "$0" "${ORIGINAL_ARGS[@]}"
 fi
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "ChrisLab-DNS must be installed before the DHCP module." >&2
