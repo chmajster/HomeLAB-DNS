@@ -120,11 +120,11 @@ def test_invalid_auth_mode_is_rejected(db):
         raise AssertionError("invalid authentication mode was accepted")
 
 
-def test_first_external_identity_bootstraps_administrator_even_with_local_admin(db):
+def test_external_pam_identity_is_read_only_when_admin_exists(db):
     db.add(User(username="local-admin", password_hash=hash_password("secret"), role="administrator", enabled=True))
     db.commit()
     user = authentication.ensure_authorization_profile(db, "first-linux-user", "pam")
-    assert user.role == "administrator"
+    assert user.role == "read_only"
     assert user.password_hash == EXTERNAL_PASSWORD_MARKER
 
 

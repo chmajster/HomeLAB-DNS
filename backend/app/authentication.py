@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import ssl
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .config import get_settings
 from .models import AppState, User
-from .security import verify_password
+from .security import decrypt_secret, encrypt_secret, verify_password
 
 
 EXTERNAL_PASSWORD_MARKER = "!external-auth!"
@@ -31,6 +27,9 @@ class LdapSettings:
     bind_password: str = ""
     user_filter: str = "(&(objectClass=person)(uid={username}))"
     default_role: str = "read_only"
+    administrator_group_dn: str = ""
+    operator_group_dn: str = ""
+    read_only_group_dn: str = ""
 
 
 LDAP_KEYS = {
@@ -43,6 +42,9 @@ LDAP_KEYS = {
     "bind_password": "auth.ldap.bind_password",
     "user_filter": "auth.ldap.user_filter",
     "default_role": "auth.ldap.default_role",
+    "administrator_group_dn": "auth.ldap.group.administrator",
+    "operator_group_dn": "auth.ldap.group.operator",
+    "read_only_group_dn": "auth.ldap.group.read_only",
 }
 
 
@@ -78,24 +80,6 @@ def _bool_value(value: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _fernet() -> Fernet:
-    digest = hashlib.sha256(get_settings().secret_key.encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
-
-
-def _encrypt_secret(value: str) -> str:
-    return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
-
-
-def _decrypt_secret(value: str) -> str:
-    if not value:
-        return ""
-    try:
-        return _fernet().decrypt(value.encode("ascii")).decode("utf-8")
-    except (InvalidToken, ValueError, UnicodeError):
-        return ""
-
-
 def get_ldap_settings(db: Session) -> LdapSettings:
     return LdapSettings(
         enabled=_bool_value(_state_get(db, LDAP_KEYS["enabled"], "false")),
@@ -104,9 +88,12 @@ def get_ldap_settings(db: Session) -> LdapSettings:
         verify_tls=_bool_value(_state_get(db, LDAP_KEYS["verify_tls"], "true"), True),
         base_dn=_state_get(db, LDAP_KEYS["base_dn"]),
         bind_dn=_state_get(db, LDAP_KEYS["bind_dn"]),
-        bind_password=_decrypt_secret(_state_get(db, LDAP_KEYS["bind_password"])),
+        bind_password=decrypt_secret(_state_get(db, LDAP_KEYS["bind_password"])),
         user_filter=_state_get(db, LDAP_KEYS["user_filter"], "(&(objectClass=person)(uid={username}))"),
         default_role=_state_get(db, LDAP_KEYS["default_role"], "read_only"),
+        administrator_group_dn=_state_get(db, LDAP_KEYS["administrator_group_dn"]),
+        operator_group_dn=_state_get(db, LDAP_KEYS["operator_group_dn"]),
+        read_only_group_dn=_state_get(db, LDAP_KEYS["read_only_group_dn"]),
     )
 
 
@@ -123,6 +110,9 @@ def save_ldap_settings(
     clear_bind_password: bool,
     user_filter: str,
     default_role: str,
+    administrator_group_dn: str = "",
+    operator_group_dn: str = "",
+    read_only_group_dn: str = "",
 ) -> None:
     if default_role not in {"administrator", "operator", "read_only"}:
         raise ValueError("Invalid LDAP default role")
@@ -144,10 +134,13 @@ def save_ldap_settings(
     _state_set(db, LDAP_KEYS["bind_dn"], bind_dn.strip())
     _state_set(db, LDAP_KEYS["user_filter"], user_filter.strip())
     _state_set(db, LDAP_KEYS["default_role"], default_role)
+    _state_set(db, LDAP_KEYS["administrator_group_dn"], administrator_group_dn.strip())
+    _state_set(db, LDAP_KEYS["operator_group_dn"], operator_group_dn.strip())
+    _state_set(db, LDAP_KEYS["read_only_group_dn"], read_only_group_dn.strip())
     if clear_bind_password:
         _state_set(db, LDAP_KEYS["bind_password"], "")
     elif bind_password:
-        _state_set(db, LDAP_KEYS["bind_password"], _encrypt_secret(bind_password))
+        _state_set(db, LDAP_KEYS["bind_password"], encrypt_secret(bind_password))
     db.commit()
 
 
@@ -197,31 +190,64 @@ def _open_ldap_connection(server, settings: LdapSettings, user: str = "", passwo
     return conn
 
 
+def _search_ldap_user(settings: LdapSettings, username: str, attributes: list[str]):
+    from ldap3.utils.conv import escape_filter_chars
+
+    server = _ldap_server(settings)
+    service_conn = _open_ldap_connection(server, settings, settings.bind_dn, settings.bind_password)
+    if service_conn is None:
+        return None, None
+    search_filter = settings.user_filter.replace("{username}", escape_filter_chars(username))
+    ok = service_conn.search(settings.base_dn, search_filter, attributes=attributes)
+    if not ok or len(service_conn.entries) != 1:
+        service_conn.unbind()
+        return None, None
+    entry = service_conn.entries[0]
+    return service_conn, entry
+
+
 def authenticate_ldap(db: Session, username: str, password: str) -> bool:
     settings = get_ldap_settings(db)
     if not settings.enabled or not username or not password:
         return False
     try:
-        from ldap3.utils.conv import escape_filter_chars
-
-        server = _ldap_server(settings)
-        service_conn = _open_ldap_connection(server, settings, settings.bind_dn, settings.bind_password)
-        if service_conn is None:
+        service_conn, entry = _search_ldap_user(settings, username, [])
+        if service_conn is None or entry is None:
             return False
-        search_filter = settings.user_filter.replace("{username}", escape_filter_chars(username))
-        ok = service_conn.search(settings.base_dn, search_filter, attributes=[])
-        if not ok or len(service_conn.entries) != 1:
-            service_conn.unbind()
-            return False
-        user_dn = service_conn.entries[0].entry_dn
+        user_dn = entry.entry_dn
         service_conn.unbind()
-        user_conn = _open_ldap_connection(server, settings, user_dn, password)
+        user_conn = _open_ldap_connection(_ldap_server(settings), settings, user_dn, password)
         if user_conn is None:
             return False
         user_conn.unbind()
         return True
     except Exception:
         return False
+
+
+def resolve_ldap_role(db: Session, username: str) -> str:
+    settings = get_ldap_settings(db)
+    try:
+        conn, entry = _search_ldap_user(settings, username, ["memberOf"])
+        if conn is None or entry is None:
+            return settings.default_role
+        try:
+            raw_groups = getattr(entry, "memberOf", None)
+            values = list(raw_groups.values) if raw_groups is not None else []
+        finally:
+            conn.unbind()
+        groups = {str(value).strip().casefold() for value in values}
+        mappings = (
+            (settings.administrator_group_dn, "administrator"),
+            (settings.operator_group_dn, "operator"),
+            (settings.read_only_group_dn, "read_only"),
+        )
+        for dn, role in mappings:
+            if dn and dn.strip().casefold() in groups:
+                return role
+    except Exception:
+        pass
+    return settings.default_role
 
 
 def test_ldap_connection(db: Session) -> tuple[bool, str]:
@@ -250,22 +276,27 @@ def authenticate_identity(db: Session, username: str, password: str) -> str | No
     return None
 
 
+def _active_admin_count(db: Session) -> int:
+    return int(db.scalar(select(func.count(User.id)).where(User.role == "administrator", User.enabled.is_(True))) or 0)
+
+
 def ensure_authorization_profile(db: Session, username: str, auth_type: str) -> User:
     user = db.scalar(select(User).where(User.username == username))
     if user is not None:
+        if auth_type == "ldap":
+            mapped_role = resolve_ldap_role(db, username)
+            if mapped_role != user.role:
+                # Never silently remove the final enabled administrator.
+                if not (user.role == "administrator" and mapped_role != "administrator" and _active_admin_count(db) <= 1):
+                    user.role = mapped_role
+                    db.commit()
+                    db.refresh(user)
         return user
 
-    external_admins = db.scalar(
-        select(func.count(User.id)).where(
-            User.role == "administrator",
-            User.enabled.is_(True),
-            User.password_hash == EXTERNAL_PASSWORD_MARKER,
-        )
-    ) or 0
-    if external_admins == 0:
+    if _active_admin_count(db) == 0:
         role = "administrator"
     elif auth_type == "ldap":
-        role = get_ldap_settings(db).default_role
+        role = resolve_ldap_role(db, username)
     else:
         role = "read_only"
 

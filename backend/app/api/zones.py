@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import io
-import json
 import tarfile
-import tempfile
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
@@ -14,8 +11,19 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..dependencies import enforce_api_csrf, require_permission
 from ..errors import AppError
-from ..models import Record, Zone
-from ..schemas import BulkRecordRequest, RecordCreate, RecordOut, RecordUpdate, ReverseZoneRequest, ZoneCreate, ZoneOut, ZoneUpdate
+from ..models import Record, Zone, ZoneRevision
+from ..schemas import (
+    BulkRecordRequest,
+    RecordCreate,
+    RecordOut,
+    RecordUpdate,
+    ReverseZoneRequest,
+    ZoneCreate,
+    ZoneOut,
+    ZoneRestoreRequest,
+    ZoneRevisionOut,
+    ZoneUpdate,
+)
 from ..security import Principal, get_client_ip
 from ..services.audit import write_audit
 from ..services.zones import ZoneService
@@ -53,7 +61,7 @@ def list_zones(
     return {"items": [_zone_out(item).model_dump() for item in items], "total": total, "limit": limit, "offset": offset}
 
 
-@router.post("", response_model=ZoneOut, status_code=201, summary="Create a primary zone", description="Requires zones.write. The zone is validated and reloaded transactionally.")
+@router.post("", response_model=ZoneOut, status_code=201, summary="Create a primary or secondary zone", description="Requires zones.write. The resulting BIND configuration is validated and reloaded transactionally.")
 def create_zone(
     payload: ZoneCreate,
     request: Request,
@@ -84,7 +92,7 @@ def create_reverse_zone(
     return _zone_out(zone)
 
 
-@router.post("/{zone_name}/copy", response_model=ZoneOut, status_code=201, summary="Copy a zone", description="Requires zones.write. The copy receives a fresh SOA serial and is validated before activation.")
+@router.post("/{zone_name}/copy", response_model=ZoneOut, status_code=201, summary="Copy a primary zone", description="Requires zones.write. The copy receives a fresh SOA serial and is validated before activation.")
 def copy_zone(
     zone_name: str,
     new_name: str,
@@ -103,6 +111,50 @@ def copy_zone(
 @router.get("/{zone_name}", response_model=ZoneOut, summary="Get zone", description="Requires zones.read.")
 def get_zone(zone_name: str, db: Session = Depends(get_db), principal: Principal = Depends(require_permission("zones.read"))):
     return _zone_out(ZoneService(db).get(zone_name))
+
+
+@router.get("/{zone_name}/revisions", response_model=list[ZoneRevisionOut], summary="List zone revisions", description="Requires zones.read.")
+def list_zone_revisions(
+    zone_name: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission("zones.read")),
+):
+    service = ZoneService(db)
+    service.get(zone_name)
+    return [ZoneRevisionOut.model_validate(item) for item in service.list_revisions(zone_name.rstrip(".").lower(), limit)]
+
+
+@router.post("/{zone_name}/revisions/{revision_id}/restore", response_model=ZoneOut, summary="Restore a zone revision", description="Requires zones.write and the current zone version.")
+def restore_zone_revision(
+    zone_name: str,
+    revision_id: int,
+    payload: ZoneRestoreRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission("zones.write")),
+    _: Principal = Depends(enforce_api_csrf),
+):
+    service = ZoneService(db)
+    zone = service.get(zone_name)
+    if not zone.managed:
+        raise AppError("EXTERNAL_ZONE_READ_ONLY", "Externally managed zones are read-only", 409)
+    revision = db.get(ZoneRevision, revision_id)
+    if revision is None or revision.zone_name != zone.name:
+        raise AppError("REVISION_NOT_FOUND", "Zone revision not found", 404)
+    old = {"version": zone.version, "serial": zone.serial}
+    result = service.restore_revision(zone, revision, payload.version, principal.username)
+    write_audit(
+        db,
+        principal,
+        get_client_ip(request),
+        "RESTORE_ZONE_REVISION",
+        "SUCCESS",
+        zone=zone.name,
+        old_value=old,
+        new_value={"revision_id": revision_id, "restored_version": revision.version, "current_version": result.version},
+    )
+    return _zone_out(result)
 
 
 @router.post("/{zone_name}/preview", response_model=dict, summary="Preview zone settings", description="Requires zones.write. No files are modified.")
@@ -130,13 +182,23 @@ def update_zone(
     zone = service.get(zone_name)
     if not zone.managed:
         raise AppError("EXTERNAL_ZONE_READ_ONLY", "Externally managed zones must be synchronized or imported before editing", 409)
-    old = {"enabled": zone.enabled, "default_ttl": zone.default_ttl, "soa_mname": zone.soa_mname, "soa_rname": zone.soa_rname, "version": zone.version}
+    old = {
+        "enabled": zone.enabled,
+        "default_ttl": zone.default_ttl,
+        "soa_mname": zone.soa_mname,
+        "soa_rname": zone.soa_rname,
+        "primary_servers": list(zone.primary_servers or []),
+        "allow_transfer": list(zone.allow_transfer or []),
+        "also_notify": list(zone.also_notify or []),
+        "tsig_key_name": zone.tsig_key_name,
+        "version": zone.version,
+    }
     result = service.update(zone, payload, principal.username)
     write_audit(db, principal, get_client_ip(request), "UPDATE_ZONE", "SUCCESS", zone=zone.name, old_value=old, new_value=payload.model_dump())
     return _zone_out(result)
 
 
-@router.delete("/{zone_name}", status_code=204, summary="Delete a managed zone", description="Requires zones.write. A backup is created before deletion.")
+@router.delete("/{zone_name}", status_code=204, summary="Delete a managed zone", description="Requires zones.write. A backup and revision are created before deletion.")
 def delete_zone(
     zone_name: str,
     zone_version: int = Query(..., ge=1),
@@ -154,7 +216,7 @@ def delete_zone(
     return Response(status_code=204)
 
 
-@router.get("/{zone_name}/records", response_model=dict, summary="List records", description="Requires records.read.")
+@router.get("/{zone_name}/records", response_model=dict, summary="List records", description="Requires records.read. Secondary-zone records are not mirrored into the application database.")
 def list_records(
     zone_name: str,
     q: str | None = None,
@@ -188,10 +250,11 @@ def list_records(
         "limit": limit,
         "offset": offset,
         "zone_version": zone.version,
+        "zone_type": zone.zone_type,
     }
 
 
-@router.post("/{zone_name}/records", response_model=RecordOut, status_code=201, summary="Create a DNS record", description="Requires records.write.")
+@router.post("/{zone_name}/records", response_model=RecordOut, status_code=201, summary="Create a DNS record", description="Requires records.write. Secondary zones are read-only.")
 def create_record(
     zone_name: str,
     payload: RecordCreate,
@@ -245,7 +308,7 @@ def preview_record_update(
     return {"diff": service.preview_record(zone, payload, record)}
 
 
-@router.put("/{zone_name}/records/{record_id}", response_model=RecordOut, summary="Update record", description="Requires records.write.")
+@router.put("/{zone_name}/records/{record_id}", response_model=RecordOut, summary="Update record", description="Requires records.write. Secondary zones are read-only.")
 def update_record(
     zone_name: str,
     record_id: int,
@@ -302,6 +365,7 @@ def bulk_records(
 ):
     service = ZoneService(db)
     zone = service.get(zone_name)
+    service._require_primary(zone)
     if zone.version != payload.zone_version:
         raise AppError("ZONE_VERSION_CONFLICT", "Zone was modified by another administrator", 409)
     records = list(db.scalars(select(Record).where(Record.zone_id == zone.id, Record.id.in_(payload.record_ids))))
@@ -312,6 +376,7 @@ def bulk_records(
     if not zone.managed:
         raise AppError("EXTERNAL_ZONE_READ_ONLY", "Externally managed zones are read-only", 409)
     old = [RecordOut.model_validate(item).model_dump() for item in records]
+    service._record_revision(zone, f"before BULK_{payload.operation.upper()}", principal.username)
     if payload.operation == "delete":
         for item in records:
             db.delete(item)
@@ -319,6 +384,7 @@ def bulk_records(
         for item in records:
             item.ttl = int(payload.ttl)
     from ..services.serials import next_soa_serial
+
     zone.serial = next_soa_serial(zone.serial)
     zone.version += 1
     db.flush()
@@ -332,16 +398,18 @@ def bulk_records(
     return {"updated": len(records), "zone_version": zone.version}
 
 
-@router.get("/{zone_name}/export", summary="Export a zone file", description="Requires zones.read.")
+@router.get("/{zone_name}/export", summary="Export a zone file", description="Requires zones.read. Secondary zones are transferred by BIND and do not have a panel-managed authoritative zone file.")
 def export_zone(zone_name: str, db: Session = Depends(get_db), principal: Principal = Depends(require_permission("zones.read"))):
     zone = ZoneService(db).get(zone_name)
+    if zone.zone_type == "secondary":
+        raise AppError("SECONDARY_EXPORT_UNAVAILABLE", "Secondary zone content is owned by BIND transfer state, not the panel database", 409)
     text = render_zone(zone) if zone.managed else ZoneService(db).bind.read_zone(zone.source_path or "")
     return PlainTextResponse(text, headers={"Content-Disposition": f'attachment; filename="{zone.file_name}"'})
 
 
-@router.get("/export/all/archive", summary="Export all zones", description="Requires zones.read. Returns a gzip-compressed tar archive containing standard BIND zone files.")
+@router.get("/export/all/archive", summary="Export all primary zones", description="Requires zones.read. Returns a gzip-compressed tar archive containing standard BIND primary zone files.")
 def export_all_zones(db: Session = Depends(get_db), principal: Principal = Depends(require_permission("zones.read"))):
-    zones = list(db.scalars(select(Zone).order_by(Zone.name)))
+    zones = list(db.scalars(select(Zone).where(Zone.zone_type != "secondary").order_by(Zone.name)))
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         for zone in zones:

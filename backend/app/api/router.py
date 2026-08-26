@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -15,6 +12,7 @@ from ..security import Principal
 from ..services.bind import BindService
 from .admin import audit_router, backups_router, tokens_router, users_router
 from .bindops import router as bind_router
+from .platform import router as platform_router
 from .tools import router as tools_router
 from .zones import router as zones_router
 
@@ -67,7 +65,7 @@ def global_search(
         .order_by(Zone.name, Record.name).limit(safe_limit)
     ))
     return {
-        "zones": [{"name": z.name, "enabled": z.enabled, "managed": z.managed, "serial": z.serial} for z in zones],
+        "zones": [{"name": z.name, "enabled": z.enabled, "managed": z.managed, "serial": z.serial, "zone_type": z.zone_type} for z in zones],
         "records": [{"zone": z.name, "id": r.id, "name": r.name, "type": r.type, "value": r.value, "ttl": r.ttl} for r, z in records],
     }
 
@@ -99,6 +97,7 @@ def status(db: Session = Depends(get_db), principal: Principal = Depends(require
 
 api_router.include_router(zones_router)
 api_router.include_router(bind_router)
+api_router.include_router(platform_router)
 api_router.include_router(backups_router)
 api_router.include_router(audit_router)
 api_router.include_router(tokens_router)

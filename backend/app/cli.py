@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .database import SessionLocal, init_db
+from .database import SessionLocal, ensure_schema_columns, init_db
 from .errors import AppError
 from .models import AppState, Backup, User
 from .security import hash_password
@@ -55,6 +55,7 @@ def create_admin(username: str, password: str | None, *, only_if_admin_missing: 
 
 def migrate() -> None:
     init_db()
+    ensure_schema_columns()
     with SessionLocal() as db:
         if db.get(AppState, "auth.mode") is None:
             db.add(AppState(key="auth.mode", value="local"))

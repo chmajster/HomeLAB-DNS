@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -21,6 +21,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(32), default="read_only", index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     theme: Mapped[str] = mapped_column(String(16), default="system")
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    totp_recovery_codes: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     tokens: Mapped[list[ApiToken]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -63,6 +66,10 @@ class Zone(Base):
     minimum: Mapped[int] = mapped_column(Integer, default=300)
     version: Mapped[int] = mapped_column(Integer, default=1)
     validation_status: Mapped[str] = mapped_column(String(32), default="valid")
+    primary_servers: Mapped[list[str]] = mapped_column(JSON, default=list)
+    allow_transfer: Mapped[list[str]] = mapped_column(JSON, default=list)
+    also_notify: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tsig_key_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_modified: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     records: Mapped[list[Record]] = relationship(back_populates="zone", cascade="all, delete-orphan", order_by="Record.id")
 
@@ -118,3 +125,41 @@ class AppState(Base):
 
     key: Mapped[str] = mapped_column(String(120), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+
+
+class DnsServer(Base):
+    __tablename__ = "dns_servers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    address: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(32), default="secondary", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    tsig_key_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TsigKey(Base):
+    __tablename__ = "tsig_keys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    algorithm: Mapped[str] = mapped_column(String(32), default="hmac-sha256")
+    secret_encrypted: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ZoneRevision(Base):
+    __tablename__ = "zone_revisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    zone_name: Mapped[str] = mapped_column(String(255), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    serial: Mapped[int] = mapped_column(Integer)
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(255))
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

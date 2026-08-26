@@ -28,9 +28,10 @@
       <a class="nav-link" href="/">Dashboard</a><a class="nav-link" href="/zones">Zones</a><a class="nav-link" href="/records">Records</a>
       <a class="nav-link" href="/dns-lookup">DNS Lookup</a><a class="nav-link" href="/backups">Backups</a><a class="nav-link" href="/logs">Logs</a>
       <a class="nav-link" href="/audit">Audit Log</a><a class="nav-link" href="/synchronize">Synchronize</a>
+      {% if 'settings.manage' in permissions %}<a class="nav-link" href="/dns-platform">DNS Platform</a>{% endif %}
       {% if 'tokens.manage' in permissions %}<a class="nav-link" href="/api-tokens">API Tokens</a>{% endif %}
       {% if 'users.manage' in permissions %}<a class="nav-link" href="/users">Users</a>{% endif %}
-      <a class="nav-link" href="/settings">Settings</a><a class="nav-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
+      <a class="nav-link" href="/security">Security / 2FA</a><a class="nav-link" href="/settings">Settings</a><a class="nav-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
     </nav>
   </div>
 </div>
