@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}DHCP · ChrisLab DNS{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between gap-3 mb-4">
+  <div><h1 class="h3 mb-1">DHCP Server</h1><p class="text-body-secondary mb-0">Kea DHCPv4/DHCPv6 — konfiguracja, subnety, pule, rezerwacje, opcje, lease'y i usługi.</p></div>
+</div>
+{% if message %}<div class="alert alert-success">{{ message }}</div>{% endif %}
+<div class="alert alert-warning"><strong>Ochrona przed rogue DHCP:</strong> instalator nie uruchamia automatycznie Kea. Najpierw zapisz konfigurację, użyj <strong>Validate</strong>, potem <strong>Apply</strong> i dopiero uruchom usługę. Zaawansowany JSON obsługuje pełną konfigurację Kea z wyjątkiem <code>hooks-libraries</code>, które są blokowane ze względów bezpieczeństwa.</div>
+
+{% macro family_panel(family, config, raw, status, leases, logs, runtime_error) %}
+{% set subnet_key = 'subnet4' if family == 4 else 'subnet6' %}
+{% set subnets = config.get(subnet_key, []) %}
+{% set options = config.get('option-data', []) %}
+<div class="tab-pane fade {% if family == 4 %}show active{% endif %}" id="dhcp{{ family }}" role="tabpanel">
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <div class="card"><div class="card-body d-flex flex-wrap align-items-center gap-3">
+        <div><h2 class="h5 mb-1">DHCPv{{ family }}</h2><span class="badge {% if status.get('active') %}text-bg-success{% else %}text-bg-secondary{% endif %}">{{ 'running' if status.get('active') else 'stopped' }}</span> <span class="badge {% if status.get('enabled') %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ 'enabled' if status.get('enabled') else 'disabled' }}</span></div>
+        <div class="small text-body-secondary">{{ status.get('service', 'kea-dhcp' ~ family ~ '-server') }} · {{ status.get('version', 'version unavailable') }} · {{ status.get('config', '') }}</div>
+        {% if can_manage %}<div class="ms-auto d-flex flex-wrap gap-1">
+          {% for action, label in [('start','Start'),('stop','Stop'),('restart','Restart'),('enable-start','Enable + Start'),('disable-stop','Disable + Stop')] %}
+          <form method="post" action="/dhcp/{{ family }}/service"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="{{ action }}"><button class="btn btn-sm {% if action in ['stop','disable-stop'] %}btn-outline-danger{% else %}btn-outline-secondary{% endif %}">{{ label }}</button></form>
+          {% endfor %}
+        </div>{% endif %}
+      </div></div>
+      {% if runtime_error %}<div class="alert alert-danger mt-2 mb-0">Runtime: {{ runtime_error }}</div>{% endif %}
+    </div>
+
+    <div class="col-xl-6"><div class="card h-100"><div class="card-body">
+      <h3 class="h5">Ustawienia globalne</h3>
+      <form method="post" action="/dhcp/{{ family }}/global" class="row g-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="col-12"><label class="form-label">Interfejsy</label><input class="form-control" name="interfaces" value="{{ config.get('interfaces-config', {}).get('interfaces', [])|join(',') }}" placeholder="eth0, vlan10"><div class="form-text">Wykryte: {{ interfaces|join(', ') or 'brak' }}</div></div>
+        <div class="col-md-4"><label class="form-label">Valid lifetime</label><input class="form-control" type="number" name="valid_lifetime" value="{{ config.get('valid-lifetime', 3600) }}"></div>
+        <div class="col-md-4"><label class="form-label">Renew T1</label><input class="form-control" type="number" name="renew_timer" value="{{ config.get('renew-timer', 900) }}"></div>
+        <div class="col-md-4"><label class="form-label">Rebind T2</label><input class="form-control" type="number" name="rebind_timer" value="{{ config.get('rebind-timer', 1800) }}"></div>
+        {% if family == 6 %}<div class="col-md-4"><label class="form-label">Preferred lifetime</label><input class="form-control" type="number" name="preferred_lifetime" value="{{ config.get('preferred-lifetime', 1800) }}"></div>{% endif %}
+        {% if family == 4 %}<div class="col-md-4 d-flex align-items-end"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="authoritative" id="auth4" {% if config.get('authoritative', True) %}checked{% endif %}><label class="form-check-label" for="auth4">Authoritative</label></div></div>{% endif %}
+        <div class="col-md-8"><label class="form-label">DNS servers</label><input class="form-control" name="dns_servers" placeholder="10.0.0.2,10.0.0.3"></div>
+        <div class="col-md-4"><label class="form-label">Domain</label><input class="form-control" name="domain_name" placeholder="lab.local"></div>
+        {% if can_manage %}<div class="col-12"><button class="btn btn-primary">Zapisz draft</button></div>{% endif %}
+      </form>
+    </div></div></div>
+
+    <div class="col-xl-6"><div class="card h-100"><div class="card-body">
+      <h3 class="h5">Wdrożenie</h3>
+      <p class="text-body-secondary">Draft nie zmienia aktywnego serwera. Validate uruchamia parser Kea, Apply wykonuje backup i atomową zmianę pliku.</p>
+      {% if can_manage %}<div class="d-flex flex-wrap gap-2 mb-3">
+        <form method="post" action="/dhcp/{{ family }}/validate"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-outline-primary">Validate</button></form>
+        <form method="post" action="/dhcp/{{ family }}/apply"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-primary">Apply</button></form>
+        <form method="post" action="/dhcp/{{ family }}/import"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-outline-secondary">Import aktywnego Kea</button></form>
+      </div>{% endif %}
+      <div class="small"><strong>Lease DB:</strong> {{ config.get('lease-database', {}).get('type', 'memfile') }} · {{ config.get('lease-database', {}).get('name', 'default') }}</div>
+    </div></div></div>
+
+    <div class="col-12"><div class="card"><div class="card-body">
+      <h3 class="h5">Subnety</h3>
+      {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets" class="row g-2 mb-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="col-lg-3"><input class="form-control" name="subnet" placeholder="{{ '10.0.10.0/24' if family == 4 else '2001:db8:10::/64' }}" required></div>
+        <div class="col-lg-2"><input class="form-control" name="interface" placeholder="Interface"></div>
+        <div class="col-lg-3"><input class="form-control" name="pool" placeholder="{{ '10.0.10.100 - 10.0.10.200' if family == 4 else '2001:db8:10::1000/120' }}"></div>
+        {% if family == 4 %}<div class="col-lg-2"><input class="form-control" name="routers" placeholder="Gateway"></div>{% endif %}
+        <div class="col-lg-2"><input class="form-control" name="dns_servers" placeholder="DNS"></div>
+        <div class="col-lg-2"><input class="form-control" name="domain_name" placeholder="Domain"></div>
+        <div class="col-lg-2"><input class="form-control" type="number" name="valid_lifetime" placeholder="Lifetime"></div>
+        <div class="col-lg-2"><button class="btn btn-primary w-100">Dodaj subnet</button></div>
+      </form>{% endif %}
+      {% for subnet in subnets %}
+      <div class="border rounded p-3 mb-3">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-3"><strong>{{ subnet.get('subnet') }}</strong><span class="badge text-bg-secondary">ID {{ subnet.get('id') }}</span>{% if subnet.get('interface') %}<span class="badge text-bg-info">{{ subnet.get('interface') }}</span>{% endif %}
+        {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/delete" class="ms-auto"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-sm btn-outline-danger">Usuń subnet</button></form>{% endif %}</div>
+        <div class="row g-3">
+          <div class="col-xl-4"><h4 class="h6">Pule</h4>
+            {% for pool in subnet.get('pools', []) %}<div class="d-flex gap-2 align-items-center mb-1"><code>{{ pool.get('pool') }}</code>{% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/pools/{{ loop.index0 }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-sm btn-link text-danger">usuń</button></form>{% endif %}</div>{% else %}<span class="text-body-secondary">Brak pul.</span>{% endfor %}
+            {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/pools" class="input-group input-group-sm mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input class="form-control" name="pool" placeholder="Zakres/CIDR" required><button class="btn btn-outline-primary">Dodaj</button></form>{% endif %}
+          </div>
+          <div class="col-xl-4"><h4 class="h6">Rezerwacje</h4>
+            {% for reservation in subnet.get('reservations', []) %}<div class="small border-bottom py-1"><code>{{ reservation.get('ip-address') or (reservation.get('ip-addresses', [])|join(',')) }}</code> · {{ reservation.get('hostname','') }} · {{ reservation.get('hw-address') or reservation.get('client-id') or reservation.get('duid') or reservation.get('flex-id') }}{% if can_manage %}<form class="d-inline" method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/reservations/{{ loop.index0 }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-sm btn-link text-danger">usuń</button></form>{% endif %}</div>{% else %}<span class="text-body-secondary">Brak rezerwacji.</span>{% endfor %}
+            {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/reservations" class="row g-1 mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col-4"><select class="form-select form-select-sm" name="identifier_type">{% if family == 4 %}<option>hw-address</option><option>client-id</option>{% else %}<option>duid</option><option>hw-address</option>{% endif %}<option>flex-id</option></select></div><div class="col-8"><input class="form-control form-control-sm" name="identifier" placeholder="MAC/DUID/client-id" required></div><div class="col-6"><input class="form-control form-control-sm" name="address" placeholder="IP" required></div><div class="col-6"><input class="form-control form-control-sm" name="hostname" placeholder="Hostname"></div><div class="col-12"><button class="btn btn-sm btn-outline-primary">Dodaj rezerwację</button></div></form>{% endif %}
+          </div>
+          <div class="col-xl-4"><h4 class="h6">Opcje subnetu</h4>
+            {% for option in subnet.get('option-data', []) %}<div class="small border-bottom py-1"><code>{{ option.get('name') or option.get('code') }}</code> = {{ option.get('data') }}{% if can_manage %}<form class="d-inline" method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/options/{{ loop.index0 }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-sm btn-link text-danger">usuń</button></form>{% endif %}</div>{% else %}<span class="text-body-secondary">Brak opcji.</span>{% endfor %}
+            {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/subnets/{{ subnet.get('id') }}/options" class="row g-1 mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col-5"><input class="form-control form-control-sm" name="name" placeholder="Option name"></div><div class="col-7"><input class="form-control form-control-sm" name="data" placeholder="Data" required></div><div class="col-4"><input class="form-control form-control-sm" type="number" name="code" placeholder="Code"></div><div class="col-4"><input class="form-control form-control-sm" name="space" placeholder="Space"></div><div class="col-4 form-check mt-2"><input class="form-check-input" type="checkbox" name="csv_format" checked><label class="form-check-label">CSV</label></div><div class="col-12"><button class="btn btn-sm btn-outline-primary">Dodaj opcję</button></div></form>{% endif %}
+          </div>
+        </div>
+      </div>
+      {% else %}<p class="text-body-secondary">Brak skonfigurowanych subnetów.</p>{% endfor %}
+    </div></div></div>
+
+    <div class="col-lg-6"><div class="card h-100"><div class="card-body"><h3 class="h5">Opcje globalne</h3>
+      {% for option in options %}<div class="d-flex gap-2 border-bottom py-2"><code>{{ option.get('name') or option.get('code') }}</code><span>{{ option.get('data') }}</span>{% if can_manage %}<form method="post" action="/dhcp/{{ family }}/options/{{ loop.index0 }}/delete" class="ms-auto"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-sm btn-link text-danger">usuń</button></form>{% endif %}</div>{% endfor %}
+      {% if can_manage %}<form method="post" action="/dhcp/{{ family }}/options" class="row g-2 mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col-md-4"><input class="form-control" name="name" placeholder="name"></div><div class="col-md-2"><input class="form-control" type="number" name="code" placeholder="code"></div><div class="col-md-6"><input class="form-control" name="data" placeholder="data" required></div><div class="col-md-4"><input class="form-control" name="space" placeholder="space"></div><div class="col-md-3 form-check ms-2 mt-2"><input class="form-check-input" type="checkbox" name="csv_format" checked><label class="form-check-label">csv-format</label></div><div class="col-12"><button class="btn btn-outline-primary">Dodaj opcję</button></div></form>{% endif %}
+    </div></div></div>
+
+    <div class="col-lg-6"><div class="card h-100"><div class="card-body"><h3 class="h5">Aktywne lease'y (memfile)</h3><div class="table-responsive" style="max-height:420px"><table class="table table-sm"><thead><tr><th>Address</th><th>Client</th><th>Hostname</th><th>Subnet</th><th>Expire</th></tr></thead><tbody>{% for lease in leases %}<tr><td class="font-monospace">{{ lease.get('address','') }}</td><td class="small">{{ lease.get('hwaddr') or lease.get('duid') or lease.get('client_id') or '—' }}</td><td>{{ lease.get('hostname','') }}</td><td>{{ lease.get('subnet_id','') }}</td><td class="small">{{ lease.get('expire','') }}</td></tr>{% else %}<tr><td colspan="5" class="text-body-secondary">Brak lease'ów albo używany jest backend inny niż memfile.</td></tr>{% endfor %}</tbody></table></div></div></div></div>
+
+    <div class="col-12"><div class="card"><div class="card-body"><h3 class="h5">Zaawansowana konfiguracja — pełny JSON Kea</h3><p class="text-body-secondary">Tutaj można ustawić pozostałe parametry Kea, których nie ma w formularzach. Zapis trafia tylko do draftu; aktywacja wymaga Apply.</p>{% if can_manage %}<form method="post" action="/dhcp/{{ family }}/advanced"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><textarea class="form-control font-monospace" rows="22" name="config_json" spellcheck="false">{{ raw }}</textarea><button class="btn btn-primary mt-2">Zapisz JSON</button></form>{% else %}<pre class="bg-body-tertiary p-3 rounded"><code>{{ raw }}</code></pre>{% endif %}</div></div></div>
+
+    <div class="col-12"><div class="card"><div class="card-body"><h3 class="h5">Logi Kea DHCPv{{ family }}</h3><pre class="bg-body-tertiary p-3 rounded mb-0" style="max-height:420px;overflow:auto"><code>{{ logs }}</code></pre></div></div></div>
+  </div>
+</div>
+{% endmacro %}
+
+<ul class="nav nav-tabs" role="tablist"><li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dhcp4" type="button">DHCPv4</button></li><li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dhcp6" type="button">DHCPv6</button></li></ul>
+<div class="tab-content">
+{{ family_panel(4, config4, raw4, status4, leases4, logs4, error4) }}
+{{ family_panel(6, config6, raw6, status6, leases6, logs6, error6) }}
+</div>
+{% endblock %}
