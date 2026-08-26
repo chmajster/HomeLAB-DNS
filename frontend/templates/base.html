@@ -26,7 +26,7 @@
   <div class="offcanvas-body p-3 d-block">
     <nav class="nav nav-pills flex-column gap-1">
       <a class="nav-link" href="/">Dashboard</a><a class="nav-link" href="/zones">Zones</a><a class="nav-link" href="/records">Records</a>
-      <a class="nav-link" href="/dns-lookup">DNS Lookup</a><a class="nav-link" href="/backups">Backups</a><a class="nav-link" href="/logs">Logs</a>
+      <a class="nav-link" href="/dns-lookup">DNS Lookup</a>{% if 'dhcp.read' in permissions %}<a class="nav-link" href="/dhcp">DHCP Server</a>{% endif %}<a class="nav-link" href="/backups">Backups</a><a class="nav-link" href="/logs">Logs</a>
       <a class="nav-link" href="/audit">Audit Log</a><a class="nav-link" href="/synchronize">Synchronize</a>
       {% if 'settings.manage' in permissions %}<a class="nav-link" href="/dns-platform">DNS Platform</a>{% endif %}
       {% if 'tokens.manage' in permissions %}<a class="nav-link" href="/api-tokens">API Tokens</a>{% endif %}
