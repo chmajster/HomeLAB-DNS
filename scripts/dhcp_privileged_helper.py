@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import os
@@ -13,10 +14,10 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 CONFIG_FILE = Path("/etc/chrislab-dhcp-helper.conf")
-BACKUP_NAME_RE = re.compile(r"^kea-dhcp([46])-\d{8}T\d{6}Z\.json$")
+BACKUP_NAME_RE = re.compile(r"^kea-dhcp([46])-\d{8}T\d{6}(?:-\d{2})?Z\.json$")
 UNSAFE_KEYS = {"hooks-libraries"}
 
 
@@ -117,6 +118,31 @@ def staged_file(config: dict[str, str], raw: str) -> Path:
     return value.resolve(strict=True)
 
 
+@contextlib.contextmanager
+def trusted_kea_candidate(config: dict[str, str], family: int, source: Path) -> Iterator[Path]:
+    """Copy an untrusted staged/backup file into Kea's AppArmor-readable config dir.
+
+    Ubuntu's Kea AppArmor profile intentionally cannot read the application's
+    staging directory. The helper validates path/JSON first, then creates a
+    root-owned temporary candidate next to the real Kea config. The candidate
+    never becomes active by itself and is removed after syntax validation.
+    """
+    target = config_path(config, family)
+    directory = target.parent.resolve(strict=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".chrislab-dhcp{family}-", suffix=".json", dir=directory)
+    temp = Path(temp_name)
+    try:
+        with source.open("rb") as src, os.fdopen(fd, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.chown(temp, 0, 0)
+        os.chmod(temp, 0o600)
+        yield temp
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def validate_kea(family: int, path: Path) -> str:
     proc = run([binary(family), "-t", str(path)], timeout=60)
     return (proc.stdout + proc.stderr).strip() or "Configuration valid"
@@ -174,7 +200,7 @@ def backup_current(config: dict[str, str], family: int, target: Path) -> Path | 
     counter = 0
     while destination.exists():
         counter += 1
-        destination = backup_root / f"kea-dhcp{family}-{stamp[:-1]}{counter:02d}Z.json"
+        destination = backup_root / f"kea-dhcp{family}-{stamp[:-1]}-{counter:02d}Z.json"
     shutil.copy2(target, destination)
     os.chown(destination, 0, 0)
     os.chmod(destination, 0o600)
@@ -183,16 +209,18 @@ def backup_current(config: dict[str, str], family: int, target: Path) -> Path | 
 
 def cmd_validate(args: argparse.Namespace, config: dict[str, str]) -> None:
     family = family_value(args.family)
-    path = staged_file(config, args.file)
-    load_json_file(path, family)
-    print(validate_kea(family, path))
+    source = staged_file(config, args.file)
+    load_json_file(source, family)
+    with trusted_kea_candidate(config, family, source) as candidate:
+        print(validate_kea(family, candidate))
 
 
 def cmd_apply(args: argparse.Namespace, config: dict[str, str]) -> None:
     family = family_value(args.family)
     source = staged_file(config, args.file)
     load_json_file(source, family)
-    validate_kea(family, source)
+    with trusted_kea_candidate(config, family, source) as candidate:
+        validate_kea(family, candidate)
     target = config_path(config, family)
     was_active = active(service(family))
     backup = backup_current(config, family, target)
@@ -224,7 +252,8 @@ def cmd_read_config(args: argparse.Namespace, config: dict[str, str]) -> None:
 def cmd_status(args: argparse.Namespace, config: dict[str, str]) -> None:
     family = family_value(args.family)
     name = service(family)
-    version = run([binary(family), "-V"], check=False).stdout.strip()
+    version_proc = run([binary(family), "-V"], check=False)
+    version = (version_proc.stdout or version_proc.stderr).strip()
     target = config_path(config, family)
     print(json.dumps({
         "family": family,
@@ -243,20 +272,21 @@ def cmd_service(args: argparse.Namespace, config: dict[str, str]) -> None:
     if action not in {"start", "stop", "restart", "enable", "disable", "enable-start", "disable-stop"}:
         raise HelperError("Unsupported DHCP service action", 2)
     name = service(family)
+    target = config_path(config, family)
     if action == "start":
-        validate_kea(family, config_path(config, family))
+        validate_kea(family, target)
         run(["systemctl", "start", name], timeout=90)
     elif action == "stop":
         run(["systemctl", "stop", name], timeout=90)
     elif action == "restart":
-        validate_kea(family, config_path(config, family))
+        validate_kea(family, target)
         run(["systemctl", "restart", name], timeout=90)
     elif action == "enable":
         run(["systemctl", "enable", name], timeout=30)
     elif action == "disable":
         run(["systemctl", "disable", name], timeout=30)
     elif action == "enable-start":
-        validate_kea(family, config_path(config, family))
+        validate_kea(family, target)
         run(["systemctl", "enable", "--now", name], timeout=90)
     else:
         run(["systemctl", "disable", "--now", name], timeout=90)
@@ -315,21 +345,23 @@ def cmd_backups(args: argparse.Namespace, config: dict[str, str]) -> None:
         return
     items = []
     for path in sorted(root.glob(f"kea-dhcp{family}-*.json"), reverse=True)[:100]:
-        if path.is_file() and not path.is_symlink():
+        if path.is_file() and not path.is_symlink() and BACKUP_NAME_RE.fullmatch(path.name):
             items.append({"name": path.name, "size": path.stat().st_size, "mtime": int(path.stat().st_mtime)})
     print(json.dumps(items))
 
 
 def cmd_restore(args: argparse.Namespace, config: dict[str, str]) -> None:
     family = family_value(args.family)
-    if not BACKUP_NAME_RE.fullmatch(args.name) or BACKUP_NAME_RE.fullmatch(args.name).group(1) != str(family):
+    match = BACKUP_NAME_RE.fullmatch(args.name)
+    if not match or match.group(1) != str(family):
         raise HelperError("Invalid DHCP backup name", 2)
     root = Path(config["DHCP_BACKUP_DIR"]).resolve(strict=True)
     backup = (root / args.name).resolve(strict=True)
     if backup.parent != root or not backup.is_file() or backup.is_symlink():
-        raise HelperError("DHCP backup not found", 404)
+        raise HelperError("DHCP backup not found", 2)
     load_json_file(backup, family)
-    validate_kea(family, backup)
+    with trusted_kea_candidate(config, family, backup) as candidate:
+        validate_kea(family, candidate)
     target = config_path(config, family)
     was_active = active(service(family))
     safety = backup_current(config, family, target)
@@ -351,7 +383,7 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Restricted Kea DHCP helper for ChrisLab DNS")
     sub = root.add_subparsers(dest="command", required=True)
     p = sub.add_parser("validate"); p.add_argument("--family", required=True); p.add_argument("--file", required=True); p.set_defaults(func=cmd_validate)
-    p = sub.add_parser("apply"); p.add_argument("--family", required=True); p.add_argument("--file", required=True); p.set_defaults(func=cmd_apply)
+    p = sub.add_parser("apply"); p.add_argument("--family", required=True); p.add_argument("--file", required=True); p.add_argument("--file", required=True); p.set_defaults(func=cmd_apply)
     p = sub.add_parser("read-config"); p.add_argument("--family", required=True); p.set_defaults(func=cmd_read_config)
     p = sub.add_parser("status"); p.add_argument("--family", required=True); p.set_defaults(func=cmd_status)
     p = sub.add_parser("service"); p.add_argument("--family", required=True); p.add_argument("--action", required=True); p.set_defaults(func=cmd_service)
