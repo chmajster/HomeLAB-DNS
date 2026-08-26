@@ -77,7 +77,7 @@ def get_settings() -> Settings:
         staging_dir=Path(os.getenv("STAGING_DIR", str(data_dir / "staging"))),
         bind_helper=tuple(shlex.split(helper_raw)),
         dhcp_helper=tuple(shlex.split(dhcp_helper_raw)),
-        session_secure=_bool("SESSION_SECURE", True),
+        session_secure=_bool("SESSION_SECURE", False),
         session_samesite=os.getenv("SESSION_SAMESITE", "lax"),
         session_max_age=int(os.getenv("SESSION_MAX_AGE", "28800")),
         auto_backup=_bool("AUTO_BACKUP", True),
