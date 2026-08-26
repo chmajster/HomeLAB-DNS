@@ -9,7 +9,10 @@ User=bind9-web-manager
 Group=bind9-web-manager
 WorkingDirectory=/opt/bind9-web-manager
 EnvironmentFile=/etc/bind9-web-manager.env
-ExecStartPre=+/usr/bin/install -d -o bind9-web-manager -g bind -m 2770 /var/cache/bind/chrislab-dnssec
+CacheDirectory=bind/chrislab-dnssec
+CacheDirectoryMode=0770
+ExecStartPre=+/usr/bin/chgrp -R bind /var/cache/bind/chrislab-dnssec
+ExecStartPre=+/usr/bin/chmod 2770 /var/cache/bind/chrislab-dnssec
 ExecStart=/opt/bind9-web-manager/.venv/bin/python -m uvicorn backend.app.main:app --host ${APP_HOST} --port ${APP_PORT} --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
@@ -34,7 +37,7 @@ RestrictRealtime=true
 RestrictNamespaces=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-ReadWritePaths=/var/lib/bind9-web-manager /etc/bind /var/cache/bind/chrislab-dnssec
+ReadWritePaths=/var/lib/bind9-web-manager /etc/bind
 ReadOnlyPaths=/opt/bind9-web-manager /etc/bind9-web-manager.env /etc/bind9-web-manager-helper.conf /usr/local/libexec/bind9-web-manager-helper
 # sudo must be able to transition to root for the narrowly allowlisted helper.
 NoNewPrivileges=false
