@@ -83,6 +83,26 @@ def test_application_service_is_enabled_for_os_startup() -> None:
     assert "Restart=on-failure" in service
 
 
+def test_installers_always_report_panel_health_and_public_port() -> None:
+    base = BASE_INSTALLER.read_text(encoding="utf-8")
+    wrapper = INSTALLER.read_text(encoding="utf-8")
+
+    assert 'public_port="80"' in base
+    assert 'health_url="http://127.0.0.1:${public_port}/api/v1/health"' in base
+    assert 'echo "Panel availability:' in base
+    assert 'echo "Web UI port: $public_port"' in base
+    assert '"panel_available"' in base
+    assert '"panel_http_status"' in base
+
+    assert 'CHRISLAB_WRAPPED_INSTALL=1 "$BASE_INSTALLER" "${base_args[@]}"' in wrapper
+    assert 'health_url="http://${panel_check_host}:${PUBLIC_PORT}/api/v1/health"' in wrapper
+    assert 'echo "Panel availability:' in wrapper
+    assert 'echo "Web UI port: $PUBLIC_PORT"' in wrapper
+    assert 'if [[ "$SILENT" == true ]]; then\n  print_panel_status' in wrapper
+    assert 'result["panel_available"]' in wrapper
+    assert 'result["panel_http_status"]' in wrapper
+
+
 def test_panel_api_token_is_optional() -> None:
     content = INSTALLER.read_text(encoding="utf-8")
     assert 'token = os.environ["PANEL_API_TOKEN"]' in content
