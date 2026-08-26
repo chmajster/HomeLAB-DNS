@@ -51,14 +51,6 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.secret_key,
-    max_age=settings.session_max_age,
-    same_site=settings.session_samesite,
-    https_only=settings.session_secure,
-    session_cookie="chrislab_dns_session",
-)
 if settings.trusted_hosts != ("*",):
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
 
@@ -141,6 +133,18 @@ async def unhandled_error_handler(request: Request, exc: Exception):
         content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error", "details": None}},
     )
 
+
+# SessionMiddleware must wrap custom web middleware because the 2FA guard reads
+# request.session before forwarding the request. FastAPI/Starlette prepend newly
+# added middleware, so register sessions after the decorator-based middleware.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.secret_key,
+    max_age=settings.session_max_age,
+    same_site=settings.session_samesite,
+    https_only=settings.session_secure,
+    session_cookie="chrislab_dns_session",
+)
 
 app.include_router(api_router)
 app.include_router(web_platform_router)
