@@ -5,6 +5,13 @@
     <h1 class="ui-title">Records</h1>
     <p class="ui-subtitle">Przeszukuj rekordy DNS między wszystkimi strefami bez przechodzenia do każdej strefy osobno.</p>
   </div>
+  {% if 'records.write' in permissions %}
+  <div class="d-flex align-items-start">
+    <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#globalRecordModal">
+      <i class="bi bi-plus-lg me-1"></i> Nowy rekord DNS
+    </button>
+  </div>
+  {% endif %}
 </div>
 
 <div class="ui-toolbar">
@@ -36,4 +43,69 @@
     </table>
   </div>
 </div>
+
+{% if 'records.write' in permissions %}
+<div class="modal fade" id="globalRecordModal" tabindex="-1" aria-labelledby="globalRecordModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <form class="modal-content" id="global-record-form">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title fs-5" id="globalRecordModalLabel">Nowy rekord DNS</h2>
+          <div class="text-body-secondary small">Wybierz zarządzaną strefę primary i utwórz rekord bez opuszczania widoku Records.</div>
+        </div>
+        <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Zamknij"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label" for="global-record-zone">Strefa</label>
+            <select class="form-select" id="global-record-zone" name="zone_name" required>
+              <option value="">Ładowanie stref…</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label" for="global-record-name">Nazwa</label>
+            <input class="form-control" id="global-record-name" name="name" value="@" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label" for="global-record-type">Typ</label>
+            <select class="form-select" id="global-record-type" name="type">
+              {% for t in ['A','AAAA','CNAME','MX','TXT','NS','PTR','SRV','CAA'] %}<option>{{ t }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-9">
+            <label class="form-label" for="global-record-value">Wartość / target</label>
+            <input class="form-control" id="global-record-value" name="value" required>
+            <div class="form-text">Dla CNAME, MX, NS, PTR i SRV target powinien być pełną nazwą FQDN zakończoną kropką.</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label" for="global-record-ttl">TTL</label>
+            <input class="form-control" id="global-record-ttl" name="ttl" type="number" value="3600" min="30" max="604800" required>
+          </div>
+          <div class="col-md-4 global-record-extra global-record-priority d-none">
+            <label class="form-label" for="global-record-priority">Priority</label>
+            <input class="form-control" id="global-record-priority" name="priority" type="number" min="0" max="65535">
+          </div>
+          <div class="col-md-4 global-record-extra global-record-weight d-none">
+            <label class="form-label" for="global-record-weight">Weight</label>
+            <input class="form-control" id="global-record-weight" name="weight" type="number" min="0" max="65535">
+          </div>
+          <div class="col-md-4 global-record-extra global-record-port d-none">
+            <label class="form-label" for="global-record-port">Port</label>
+            <input class="form-control" id="global-record-port" name="port" type="number" min="0" max="65535">
+          </div>
+          <div class="col-12 d-none" id="global-record-error-wrap">
+            <div class="alert alert-danger mb-0" id="global-record-error"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button class="btn btn-primary" type="submit" id="global-record-submit">Utwórz rekord</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script src="/static/records-create.js"></script>
+{% endif %}
 {% endblock %}
